@@ -136,12 +136,12 @@ pressure is used for cell velocity correction. Corrected overlap fluxes are kept
 for the next momentum solve and subsequent calls. No background execution.
 """
 function planar_simple!(state::PlanarSimpleState; iterations=state.config.runtime.iterations)
-    iterations isa Integer && iterations > 0 || throw(ArgumentError("iterations must be positive"))
     model,cfg,w = state.model,state.config,state.work
-    _validate_planar_simple(model,cfg,w.pref,w.continuity)
     U,p = model.momentum.U,model.momentum.p
     fresh = _planar_state_fresh(w,U,p)
-    w.valid[] = false # failures invalidate continuation
+    w.valid[] = false # every failed call, including validation, invalidates continuation
+    iterations isa Integer && iterations > 0 || throw(ArgumentError("iterations must be positive"))
+    _validate_planar_simple(model,cfg,w.pref,w.continuity)
     if !fresh
         w.iteration[] = 0
         interpolate!(w.Uf,U,cfg)
@@ -199,10 +199,10 @@ function planar_simple!(state::PlanarSimpleState; iterations=state.config.runtim
         copyto!(a.values,b.values)
     end
     copyto!(w.savedp.values,p.values)
-    w.valid[] = true
     # Retain physical face diagnostics, but ordinary run! cannot continue overlap state.
     copyto!(model.momentum.mdotf.values,w.transport.values)
     # Invalidate ordinary continuation snapshots: they cannot represent overlaps.
     fill!(model.momentum.pmdot.values,NaN)
+    w.valid[] = true
     (; Ux=rx,Uy=ry,p=rp,p_absolute=ra,continuity=rc,iterations=length(rx),converged)
 end

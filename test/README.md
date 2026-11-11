@@ -171,6 +171,12 @@ The state allocates extended equations before initialising preconditioners, refr
 
 Histories contain executed iterations only. The state retains cumulative iteration time across calls. Changed cell velocity/pressure invalidates continuation and rebuilds initial fluxes; failures also invalidate it. Rebuild state after mesh, boundary, geometry or configuration changes, and do not mutate its working flux arrays. Physical-face diagnostics are copied to `model.momentum.mdotf`, but cannot recreate overlaps. Use `state.work.transport` for overlap diagnostics, and retain the same state for continuation—not ordinary `run!`.
 
+### Static interface verification examples and robustness
+
+`examples/interface_verification/planar_channel.jl` is a runnable, mesh-file-free channel example demonstrating shared descriptors and stateful continuation. `channel_refinement.jl` compares three nonconforming resolutions with conforming SIMPLE and exercises a stronger mismatch. See `examples/interface_verification/README.md` for commands, metrics, measured results and limitations. The case-tier test `test/cases/test_planar_verification_examples.jl` executes both scripts in isolated modules. Spatial pressure-drop errors are nonmonotonic on coarse grids; no general second-order claim is made.
+
+`test/unit/Solvers/test_planar_simple_robustness.jl` checks initial-state and relaxation variations, signed Couette flow with positive and negative overlaps, all-Neumann pressure-offset invariance, and fresh-state-equivalent recovery after validation and mid-iteration errors. Every failed call now invalidates continuation, including errors before assembly. Changing relaxation produces small measurable converged field/flux differences; tests require bounded sensitivity, not relaxation independence. A relaxation-consistent collocated-flux treatment remains future work.
+
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
 unit/Preprocess: test_setFields (region initialisation)
