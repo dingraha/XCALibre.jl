@@ -30,8 +30,27 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
-unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency)
+
 unit/IOFormats: test_foam_writer_unset_bcs
+
+### Static scalar interface diffusion
+
+Construct paired boundaries after final mesh reordering and assign both to the same scalar field:
+
+```julia
+pair = construct_planar_diffusion(mesh, :interface_a, :interface_b)
+BCs = assign((T=[pair..., Zerogradient(:outside)],); region=mesh)
+phi = ScalarField(mesh)
+gamma = ConstantScalar(2.0)
+eqn = (-Laplacian{Linear}(gamma, phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi, BCs.T)
+```
+
+This CPU-only boundary uses shared overlap conductances `gamma*length/(distance_a+distance_b)`. It supports scalar `Laplacian{Linear}` with positive constant diffusivity and ignores boundary contributions from `Time` terms. It does not provide convection, vector/pressure coupling, variable diffusivity, mesh motion, or nonorthogonal interface corrections. On skew owner pairs, the two-point approximation is exact only for fields linear in the normal direction. Rebuild boundaries and equations after geometry or ID changes; initialise preconditioners only after constructing the extended matrix.
+
+Recover physical integrated overlap fluxes (positive outward from A) with `interface_diffusion_flux!(flux, pair[1], phi, gamma)` and gather them using the geometry in `pair[1].value.coupling`. Flux recovery is for diagnostics; do not add these contributions to a balance that already includes the assembled interface operator.
+
+## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
 unit/Preprocess: test_setFields (region initialisation)
 unit/Calculate: test_wall_distance, test_least_squares, test_venkat_limiter

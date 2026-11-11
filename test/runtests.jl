@@ -24,6 +24,7 @@ const TIERS = [
         "unit/Mesh/test_boundary_distance.jl",
         "unit/Mesh/test_unv2d_geometry.jl",
         "unit/InterfaceCoupling/test_planar_interface.jl",
+        "unit/InterfaceCoupling/test_planar_diffusion.jl",
         "unit/IOFormats/test_foam_writer_unset_bcs.jl",
         "unit/Multithread/test_kernel_index_pattern.jl",
         "unit/Preprocess/test_setFields.jl",

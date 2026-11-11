@@ -16,6 +16,7 @@ using Statistics
 using XCALibre.Multithread
 using XCALibre.Multithread: _sized
 using XCALibre.Mesh
+using XCALibre.InterfaceCoupling
 using XCALibre.Fields
 using XCALibre.ModelFramework
 # # using XCALibre.Energy
@@ -53,6 +54,7 @@ include("boundary_conditions/neumannFunction_interpolation.jl")
 include("boundary_conditions/neumann_interpolation.jl")
 include("boundary_conditions/periodic.jl")
 include("boundary_conditions/periodic_interpolation.jl")
+include("boundary_conditions/planar_diffusion.jl")
 include("boundary_conditions/symmetry.jl")
 include("boundary_conditions/symmetry_interpolation.jl")
 include("boundary_conditions/wall.jl")

@@ -25,7 +25,12 @@ function validate_boundary_coverage(field_name, assigned_bcs, boundaries)
 
     unassigned = [boundaries[id].name for id in eachindex(boundaries) if counts[id] == 0]
     repeated = [boundaries[id].name for id in eachindex(boundaries) if counts[id] > 1]
-    isempty(unassigned) && isempty(repeated) && return nothing
+    if isempty(unassigned) && isempty(repeated)
+        for bc in assigned_bcs
+            validate_boundary_pair(bc, assigned_bcs)
+        end
+        return nothing
+    end
 
     details = String[]
     isempty(unassigned) || push!(details, "missing $(join(unassigned, ", "))")
@@ -34,6 +39,8 @@ function validate_boundary_coverage(field_name, assigned_bcs, boundaries)
         "incomplete boundary assignment for field '$field_name': $(join(details, "; "))",
     ))
 end
+
+validate_boundary_pair(bc, BCs) = nothing
 
 function assign_patches(BCs, region)
     newBCs = []
