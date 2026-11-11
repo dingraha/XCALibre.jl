@@ -30,7 +30,7 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
-unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve), test_planar_pressure (variable mobility, conservative pressure operator, closed-domain projection)
 
 unit/IOFormats: test_foam_writer_unset_bcs
 
@@ -73,7 +73,27 @@ Overlap fluxes are integrated volume or mass fluxes, not densities, and are posi
 
 Use `Divergence{Upwind}` or `Divergence{Linear}` in the equation. Recover transported scalar fluxes with `interface_transport_flux!(out, pair[1], phi, transport; scheme=Upwind())` or `scheme=Linear()` to match that equation; existing calls without a keyword default to upwind. Both paired descriptors give the same A-oriented result. Gather for diagnostics only, not as an extra source. `correct_boundaries!` supplies geometric interpolation, not an upwind flux trace. Interface transport has zero column sums (conservation); constant-state preservation additionally requires divergence-free complete cell flux balances.
 
-Support is CPU-only, scalar `Divergence{Upwind}` or `Divergence{Linear}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear convection uses overlap owner weights `distance_b/(distance_a+distance_b)` and `distance_a/(distance_a+distance_b)`, consistent with geometric interpolation. This is exact for normal-linear fields but provides no tangential reconstruction on skew cell pairs. Central/linear convection is not inherently bounded and may produce oscillations in convection-dominated problems. Higher-order convection, pressure correction, vector coupling, and mesh motion are not supported.
+Support is CPU-only, scalar `Divergence{Upwind}` or `Divergence{Linear}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear convection uses overlap owner weights `distance_b/(distance_a+distance_b)` and `distance_a/(distance_a+distance_b)`, consistent with geometric interpolation. This is exact for normal-linear fields but provides no tangential reconstruction on skew cell pairs. Central/linear convection is not inherently bounded and may produce oscillations in convection-dominated problems. Higher-order convection, pressure correction through `PlanarTransport`, vector coupling, and mesh motion are not supported.
+
+## Static planar pressure projection (CPU primitive)
+
+```julia
+pair = construct_planar_pressure(mesh, :interface_a, :interface_b)
+coefficient = InterfacePressureCoefficient(mesh, pair[1])
+update_interface_coefficient!(coefficient, rD) # cell mobility rD = volume / momentum diagonal
+BCs = assign((p=[pair..., Zerogradient(:outside)],); region=mesh)
+p_eqn = (-Laplacian{Linear}(coefficient, p) == -Source(predicted_divergence)) → ScalarEquation(p, BCs.p)
+# Assemble and solve with a pressure reference; initialise preconditioners after matrix extension.
+# Hold coefficients fixed between assembly and pressure-flux correction.
+predicted_overlaps = copy(transport.overlaps)
+correct_interface_pressure_flux!(transport, predicted_overlaps, pair[1], p, coefficient)
+```
+
+`InterfacePressureCoefficient` uses ordinary mesh interpolation internally and arithmetic normal-distance interpolation on overlaps. The shared overlap conductance is `G = interpolated_rD*length/(distance_a+distance_b)`. Both pressure assembly and correction use this stored value, not summed sparse matrix entries. Refresh coefficients and reassemble whenever cell mobilities change; the static interface graph need not change. Its interface face values are length-weighted coefficient averages, not flux sums. Do not modify its storage arrays directly.
+
+`interface_pressure_flux!(out, pair[1], p, coefficient)` recovers `G*(pA-pB)` oriented outward from A, for either descriptor. The correction operation sets (rather than increments) overlap fluxes from a separately saved predictor and refreshes signed physical face sums. Exterior/interior faces are untouched: callers must also correct ordinary face fluxes with the corresponding assembled pressure coefficients. Full divergence can then be calculated from the physical face fluxes; do not add the overlap gather again. A closed-domain Neumann solve requires a compatible globally balanced predictor and a pressure reference.
+
+This supports CPU scalar `Laplacian{Linear}` and boundary `Time` contributions at unit density only. It is **not** integrated into SIMPLE/PISO: vector momentum coupling, pressure-gradient reconstruction, predictor construction, density weighting, nonorthogonal corrections, moving geometry, GPU, and MPI are not yet supported. Rebuild boundaries/equations after geometry or ID changes.
 
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
