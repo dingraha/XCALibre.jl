@@ -1,5 +1,8 @@
 # Static planar-interface verification
 
+A separate [circular geometry prototype](circular_geometry.md) validates shared
+angular overlaps and surface metrics only; it does not extend the planar solver.
+
 These CPU examples build their own meshes and write no output files. Use an environment
 containing XCALibre and its dependencies:
 
