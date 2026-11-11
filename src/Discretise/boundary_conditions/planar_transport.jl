@@ -1,7 +1,9 @@
 export PlanarTransport, construct_planar_transport, interface_transport_flux!
 
-"""Paired CPU scalar upwind transport boundaries, with optional constant Linear
- diffusion and Time terms. Geometric interpolation is not the upwind flux trace.
+"""Paired CPU scalar Upwind or Linear transport boundaries, with optional constant
+Linear diffusion and Time terms. Linear convection is not inherently bounded and
+uses normal-distance interpolation without tangential reconstruction.
+Geometric interpolation is not the upwind flux trace.
 No pressure correction, vector transport, or moving interfaces are supported.
 """
 struct PlanarTransport{I,V,R<:UnitRange} <: AbstractBoundary
@@ -16,7 +18,7 @@ Adapt.@adapt_structure PlanarTransport
 
 Construct paired static straight-interface boundaries. Create the transport field
 as `InterfaceTransportFlux(mesh, pair[1].value.coupling)` and supply it to
-`Divergence{Upwind}`. Both sides must use the same coupling object.
+`Divergence{Upwind}` or `Divergence{Linear}`. Both sides must use the same coupling object.
 """
 function construct_planar_transport(mesh::Mesh2,a::Symbol,b::Symbol; kwargs...)
     pair = construct_planar_diffusion(mesh,a,b; kwargs...)
@@ -39,10 +41,18 @@ function validate_boundary_pair(bc::PlanarTransport,BCs)
     bc.ID == expected || throw(ArgumentError("Planar transport descriptor assigned to the wrong patch"))
 end
 
+# Shared A-oriented coefficients for assembly and transported-flux recovery.
+# Select the physical trace before applying the algebraic operator sign.
+@inline _planar_transport_coefficients(::Upwind,v,k,q) = (max(q,zero(q)),min(q,zero(q)))
+@inline function _planar_transport_coefficients(::Linear,v,k,q)
+    wa, wb = _planar_weights(v,k)
+    q*wa, q*wb
+end
+
 @inline function (bc::PlanarTransport)(
-    term::Operator{F,P,I,Divergence{Upwind}}, colval,rowptr,nzval,
+    term::Operator{F,P,I,Divergence{S}}, colval,rowptr,nzval,
     cellID,zcellID,cells,faces,fID,i,component,time
-    ) where {F<:InterfaceTransportFlux,P<:ScalarField,I}
+    ) where {F<:InterfaceTransportFlux,P<:ScalarField,I,S<:Union{Upwind,Linear}}
     v, flux = bc.value,term.flux
     flux.coupling === v.coupling || throw(ArgumentError("transport flux and boundary coupling must match"))
     flux.mesh === term.phi.mesh || throw(ArgumentError("transport flux and scalar field must use the same mesh"))
@@ -52,9 +62,7 @@ end
         k = adj.overlaps[entry]
         q = flux.overlaps[k]
         isfinite(q) || throw(ArgumentError("overlap fluxes must be finite"))
-        # Choose the physical donor before applying the algebraic operator sign.
-        # This also makes -Divergence exactly the negative of +Divergence.
-        a,b = max(q,zero(q)),min(q,zero(q))
+        a,b = _planar_transport_coefficients(S(),v,k,q)
         ac,an = v.side_a ? (a,b) : (-b,-a)
         neighbour = v.side_a ? v.coupling.cell_b[k] : v.coupling.cell_a[k]
         index = spindex(rowptr,colval,cellID,neighbour)
@@ -80,7 +88,7 @@ end
 end
 
 @inline function (bc::PlanarTransport)(term::Operator,args...)
-    throw(ArgumentError("PlanarTransport supports scalar Upwind divergence with InterfaceTransportFlux, constant Linear diffusion, and Time only"))
+    throw(ArgumentError("PlanarTransport supports scalar Upwind or Linear divergence with InterfaceTransportFlux, constant Linear diffusion, and Time only"))
 end
 
 @inline boundary_interpolation!(bc::PlanarTransport,phif::FaceScalarField,
@@ -91,14 +99,17 @@ interface_diffusion_flux!(flux::AbstractVector,bc::PlanarTransport,phi::ScalarFi
     interface_diffusion_flux!(flux,_diffusion_boundary(bc),phi,gamma)
 
 """
-    interface_transport_flux!(out, boundary, phi, transport)
+    interface_transport_flux!(out, boundary, phi, transport; scheme=Upwind())
 
-Recover integrated scalar flux q*phi_upwind per overlap, outward from A regardless
-of the descriptor side. Uses the same donor as assembly. Does not include an
+Recover integrated scalar flux per overlap, outward from A regardless of the
+descriptor side. Select `Upwind()` (default) or `Linear()` to match the equation.
+Uses the same coefficients as assembly. Linear uses normal-distance interpolation,
+not tangential reconstruction, and is not inherently bounded. Does not include an
 operator sign or diffusion. Gather for diagnostics, not as an additional source.
 """
 function interface_transport_flux!(out::AbstractVector,bc::PlanarTransport,
-    phi::ScalarField,transport::InterfaceTransportFlux)
+    phi::ScalarField,transport::InterfaceTransportFlux; scheme=Upwind())
+    scheme isa Union{Upwind,Linear} || throw(ArgumentError("transport recovery supports Upwind() or Linear() only"))
     c = bc.value.coupling
     transport.coupling === c || throw(ArgumentError("transport flux and boundary coupling must match"))
     transport.mesh === phi.mesh || throw(ArgumentError("transport flux and scalar field must use the same mesh"))
@@ -111,7 +122,14 @@ function interface_transport_flux!(out::AbstractVector,bc::PlanarTransport,
     all(isfinite,transport.overlaps) || throw(ArgumentError("overlap fluxes must be finite"))
     for k in eachindex(out)
         q = transport.overlaps[k]
-        out[k] = q == 0 ? zero(eltype(out)) : q*phi[q > 0 ? c.cell_a[k] : c.cell_b[k]]
+        if q == 0
+            out[k] = zero(eltype(out))
+        else
+            a,b = _planar_transport_coefficients(scheme,bc.value,k,q)
+            # Avoid reading an unused upwind donor (which may contain NaN).
+            out[k] = (a == 0 ? zero(a) : a*phi[c.cell_a[k]]) +
+                (b == 0 ? zero(b) : b*phi[c.cell_b[k]])
+        end
     end
     out
 end

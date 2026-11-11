@@ -79,6 +79,12 @@ function _extend_matrix(bc::PlanarDiffusion, mesh, i, j)
     [i;owners], [j;neighbours]
 end
 
+# Normal-distance weights of the A and B owner values at an overlap.
+@inline function _planar_weights(v, k)
+    distance = v.distance_a[k] + v.distance_b[k]
+    v.distance_b[k]/distance, v.distance_a[k]/distance
+end
+
 @inline _planar_conductance(v, k, gamma) =
     gamma*v.coupling.measure[k]/(v.distance_a[k]+v.distance_b[k])
 
@@ -122,8 +128,8 @@ end
     length_sum = zero(value)
     for entry in c.face_adjacency.ranges[row]
         k = c.face_adjacency.overlaps[entry]
-        trace = (v.distance_b[k]*phi[c.cell_a[k]] + v.distance_a[k]*phi[c.cell_b[k]])/
-            (v.distance_a[k]+v.distance_b[k])
+        wa, wb = _planar_weights(v,k)
+        trace = wa*phi[c.cell_a[k]] + wb*phi[c.cell_b[k]]
         value += c.measure[k]*trace
         length_sum += c.measure[k]
     end

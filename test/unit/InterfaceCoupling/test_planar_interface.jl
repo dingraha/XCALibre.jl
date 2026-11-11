@@ -4,10 +4,10 @@ using LinearAlgebra
 using StaticArrays
 
 # Duplicate interface coordinates but distinct node/edge IDs keep the two blocks disconnected.
-function planar_interface_fixture(; integer=Int64, float=Float64, na=2, nb=3)
+function planar_interface_fixture(; integer=Int64, float=Float64, na=2, nb=3, xa=0.0, xb=2.0)
     P, line = XCALibre.Point, XCALibre.line!
-    pts = [P(x,y,0.0) for (x,y) in ((0.0,0.0), (1.0,0.0), (0.0,1.0), (1.0,1.0),
-        (1.0,0.0), (2.0,0.0), (1.0,1.0), (2.0,1.0))]
+    pts = [P(x,y,0.0) for (x,y) in ((xa,0.0), (1.0,0.0), (xa,1.0), (1.0,1.0),
+        (1.0,0.0), (xb,0.0), (1.0,1.0), (xb,1.0))]
     edges = [line(pts,1,2,1), line(pts,3,4,1), line(pts,1,3,na), line(pts,2,4,na),
         line(pts,5,6,1), line(pts,7,8,1), line(pts,5,7,nb), line(pts,6,8,nb)]
     patches = [Patch(:interface_a,[4]), Patch(:interface_b,[7]),

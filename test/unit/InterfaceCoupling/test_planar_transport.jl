@@ -7,10 +7,10 @@ if !isdefined(@__MODULE__,:planar_interface_fixture)
     include("test_planar_interface.jl")
 end
 
-function planar_transport_config(mesh,BCs)
+function planar_transport_config(mesh,BCs; divergence=Upwind)
     Configuration(solvers=(T=SolverSetup(solver=Bicgstab(),preconditioner=Jacobi(),
         relax=1.0,convergence=1e-10,rtol=1e-12,atol=1e-12),),
-        schemes=(T=Schemes(divergence=Upwind,laplacian=Linear),),
+        schemes=(T=Schemes(divergence=divergence,laplacian=Linear),),
         runtime=Runtime(iterations=1,write_interval=-1,time_step=1),
         hardware=Hardware(backend=CPU(),workgroup=4),boundaries=BCs)
 end
@@ -94,7 +94,7 @@ end
         ordinary = FaceScalarField(mesh)
         bad = (Divergence{Upwind}(ordinary,phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi,BCs.T)
         @test_throws Exception assemble_transport!(bad,phi,BCs,cfg)
-        badlinear = (Divergence{Linear}(transport,phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi,BCs.T)
+        badlinear = (Divergence{LUST}(transport,phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi,BCs.T)
         @test_throws Exception assemble_transport!(badlinear,phi,BCs,cfg)
     end
 
@@ -163,9 +163,93 @@ end
     timed = (Time{Euler}(ConstantScalar(1.0),phi)+Divergence{Upwind}(transport,phi)
         == Source(ConstantScalar(0.0))) → ScalarEquation(phi,BCs.T)
     @test assemble_transport!(timed,phi,BCs,cfg) ≈ A+Diagonal(mesh.cell_volume)
+    # Linear convection uses the same interface and existing scalar solve seam.
+    linear_cfg = planar_transport_config(mesh,BCs;divergence=Linear)
+    linear_eqn = (Divergence{Linear}(transport,phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi,BCs.T)
+    L = assemble_transport!(linear_eqn,phi,BCs,linear_cfg)
+    @test L*fill(3.0,length(mesh.cells)) ≈ linear_eqn.equation.b
+    @test L\linear_eqn.equation.b ≈ fill(3.0,length(mesh.cells))
+    @reset linear_eqn.preconditioner = set_preconditioner(linear_cfg.solvers.T,linear_eqn)
+    @reset linear_eqn.solver = _workspace(linear_cfg.solvers.T,linear_eqn)
+    initialise!(phi,0.0)
+    solve_equation!(linear_eqn,phi,BCs.T,linear_cfg.solvers.T,linear_cfg;time=0.0)
+    @test phi.values ≈ fill(3.0,length(mesh.cells)) rtol=1e-8
+    interface_transport_flux!(out,pair[1],phi,transport;scheme=Linear())
+    @test sum(out) ≈ 3.0
+    linear_combined = (Divergence{Linear}(transport,phi)-Laplacian{Linear}(gamma,phi)
+        == Source(ConstantScalar(0.0))) → ScalarEquation(phi,BCs.T)
+    LB = assemble_transport!(linear_combined,phi,BCs,linear_cfg)
+    @test LB ≈ L+D
+    @test LB\linear_combined.equation.b ≈ fill(3.0,length(mesh.cells))
+
     # Ordinary physical-face writes remain untouched by overlap updates.
     exterior = mesh.boundaries[3].IDs_range
     old = copy(transport.values[exterior])
     update_interface_flux!(transport,-c.measure)
     @test transport.values[exterior] == old
+end
+
+@testset "Conservative planar linear transport" begin
+    for (I,T) in ((Int64,Float64),(Int32,Float64),(Int32,Float32))
+        # A normal distance = 0.25, B = 0.75; weights must be 0.75 and 0.25.
+        mesh = planar_interface_fixture(integer=I,float=T,xa=0.5,xb=2.5)
+        pair = construct_planar_transport(mesh,:interface_a,:interface_b)
+        c = pair[1].value.coupling
+        transport = InterfaceTransportFlux(mesh,c)
+        BCs = assign((T=[pair...,Zerogradient(:outside)],);region=mesh)
+        cfg = planar_transport_config(mesh,BCs;divergence=Linear)
+        phi = ScalarField(mesh)
+        phi.values .= T.([0.3,-0.7,1.1,-0.2,0.8])
+        q = T.([0.7,-0.7,0.0,0.2])
+        update_interface_flux!(transport,q)
+        @test transport[c.face_a[1]] == 0
+        eqn = (Divergence{Linear}(transport,phi) == Source(ConstantScalar(T(0)))) → ScalarEquation(phi,BCs.T)
+        A = assemble_transport!(eqn,phi,BCs,cfg)
+        expected = zeros(T,size(A))
+        for k in eachindex(q)
+            a,b = T(0.75)*q[k],T(0.25)*q[k]
+            ca,cb = c.cell_a[k],c.cell_b[k]
+            expected[ca,ca] += a; expected[ca,cb] += b
+            expected[cb,ca] -= a; expected[cb,cb] -= b
+        end
+        @test A ≈ expected
+        @test vec(sum(A;dims=1)) ≈ zeros(T,length(mesh.cells)) atol=10eps(T)
+        out = zeros(T,length(q))
+        interface_transport_flux!(out,pair[1],phi,transport;scheme=Linear())
+        @test out ≈ [q[k]*(T(0.75)*phi[c.cell_a[k]]+T(0.25)*phi[c.cell_b[k]]) for k in eachindex(q)]
+        @test interface_transport_flux!(similar(out),pair[2],phi,transport;scheme=Linear()) == out
+        cells = zeros(T,length(mesh.cells))
+        interface_cell_flux!(cells,c,out)
+        @test A*phi.values ≈ cells
+        @test abs(sum(cells)) <= 10eps(T)*sum(abs,out)
+        @test eltype(out) == T
+        @test eltype(eqn.equation.diag_nz) == I
+        for _ in 1:5
+            @test assemble_transport!(eqn,phi,BCs,cfg) == A
+        end
+        negative = (-Divergence{Linear}(transport,phi) == Source(ConstantScalar(T(0)))) → ScalarEquation(phi,BCs.T)
+        @test assemble_transport!(negative,phi,BCs,cfg) == -A
+        update_interface_flux!(transport,-q)
+        @test assemble_transport!(eqn,phi,BCs,cfg) == -A
+        update_interface_flux!(transport,q)
+        # Normal-linear exactness on skew cell pairs, without tangential reconstruction.
+        phi.values .= [T(2)*p[1]+T(3) for p in mesh.cell_centre]
+        interface_transport_flux!(out,pair[1],phi,transport;scheme=Linear())
+        @test out ≈ T(5).*q
+        phif = FaceScalarField(mesh)
+        correct_boundaries!(phif,phi,BCs.T,0.0,cfg)
+        @test phif.values[c.face_adjacency.IDs] ≈ fill(T(5),length(c.face_adjacency.IDs))
+        # Zero flux does not evaluate even a nonfinite scalar trace.
+        initialise!(phi,T(NaN))
+        update_interface_flux!(transport,zeros(T,length(q)))
+        @test interface_transport_flux!(out,pair[1],phi,transport;scheme=Linear()) == zeros(T,length(q))
+        @test interface_transport_flux!(out,pair[1],phi,transport) == zeros(T,length(q))
+        @test_throws ArgumentError interface_transport_flux!(out,pair[1],phi,transport;scheme=LUST())
+        @test_throws ArgumentError interface_transport_flux!(out,pair[1],phi,transport;scheme=Linear)
+        @test_throws ArgumentError interface_transport_flux!(transport.overlaps,pair[1],phi,transport;scheme=Linear())
+        @test_throws DimensionMismatch interface_transport_flux!(zeros(T,1),pair[1],phi,transport;scheme=Linear())
+        ordinary = FaceScalarField(mesh)
+        bad = (Divergence{Linear}(ordinary,phi) == Source(ConstantScalar(T(0)))) → ScalarEquation(phi,BCs.T)
+        @test_throws Exception assemble_transport!(bad,phi,BCs,cfg)
+    end
 end

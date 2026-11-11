@@ -30,7 +30,7 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
-unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind coupling, opposing overlap flows, throughflow solve)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve)
 
 unit/IOFormats: test_foam_writer_unset_bcs
 
@@ -71,9 +71,9 @@ Choose actual inlet/outlet boundaries for a throughflow solve; the exterior cond
 
 Overlap fluxes are integrated volume or mass fluxes, not densities, and are positive outward from A. Call `update_interface_flux!` after changing prescribed overlap fluxes; it also refreshes physical interface face sums without changing other faces or the sparse graph. Assembly uses overlap fluxes individually, so opposing flows on one physical face retain distinct upwind donors. The flux field and boundaries must reference the same coupling object. Initially one coupling per transport field is supported.
 
-Recover transported scalar fluxes with `interface_transport_flux!(out, pair[1], phi, transport)`; both paired descriptors give the same A-oriented result. Gather for diagnostics only, not as an extra source. `correct_boundaries!` supplies geometric interpolation, not an upwind flux trace. Interface transport has zero column sums (conservation); constant-state preservation additionally requires divergence-free complete cell flux balances.
+Use `Divergence{Upwind}` or `Divergence{Linear}` in the equation. Recover transported scalar fluxes with `interface_transport_flux!(out, pair[1], phi, transport; scheme=Upwind())` or `scheme=Linear()` to match that equation; existing calls without a keyword default to upwind. Both paired descriptors give the same A-oriented result. Gather for diagnostics only, not as an extra source. `correct_boundaries!` supplies geometric interpolation, not an upwind flux trace. Interface transport has zero column sums (conservation); constant-state preservation additionally requires divergence-free complete cell flux balances.
 
-Support is CPU-only, scalar `Divergence{Upwind}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear/higher-order convection, pressure correction, vector coupling, and mesh motion are not supported.
+Support is CPU-only, scalar `Divergence{Upwind}` or `Divergence{Linear}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear convection uses overlap owner weights `distance_b/(distance_a+distance_b)` and `distance_a/(distance_a+distance_b)`, consistent with geometric interpolation. This is exact for normal-linear fields but provides no tangential reconstruction on skew cell pairs. Central/linear convection is not inherently bounded and may produce oscillations in convection-dominated problems. Higher-order convection, pressure correction, vector coupling, and mesh motion are not supported.
 
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
