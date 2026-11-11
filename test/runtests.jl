@@ -63,6 +63,7 @@ const TIERS = [
         "unit/Solvers/test_run_continuation.jl",
         "unit/Solvers/test_planar_simple.jl",
         "unit/Solvers/test_planar_simple_robustness.jl",
+        "unit/Solvers/test_planar_physical_predictor.jl",
         "unit/Solvers/test_compressible_mass_flux.jl",
         "unit/Solvers/test_consistent_coupling.jl",
         "unit/Solvers/test_dt_consistent_flux.jl",

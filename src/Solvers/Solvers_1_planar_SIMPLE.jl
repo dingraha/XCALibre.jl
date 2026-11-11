@@ -44,6 +44,10 @@ function _validate_planar_simple(model,config,pref,continuity)
             throw(ArgumentError("planar SIMPLE requires steady Linear Laplacians and unlimited Gauss gradients"))
     end
     config.schemes.U.divergence === Upwind || throw(ArgumentError("planar SIMPLE requires Upwind momentum"))
+    for setup in (config.solvers.U,config.solvers.p)
+        isfinite(setup.relax) && 0 < setup.relax <= 1 ||
+            throw(ArgumentError("planar SIMPLE relaxation factors must lie in (0,1]"))
+    end
     config.runtime.write_interval < 0 && (config.postprocess === nothing || isempty(config.postprocess)) ||
         throw(ArgumentError("planar SIMPLE output/postprocessing is not supported; use write_interval=-1"))
     isfinite(continuity) && continuity > 0 || throw(ArgumentError("continuity tolerance must be positive and finite"))
@@ -116,8 +120,58 @@ function PlanarSimpleState(model,config; pref=nothing,continuity=1e-9)
         Hv=VectorField(mesh),rD=ScalarField(mesh),Uf=FaceVectorField(mesh),pf=FaceScalarField(mesh),
         faceflux=FaceScalarField(transport.values,mesh),predictor=similar(transport.overlaps),
         previous=similar(p.values),savedU=VectorField(mesh),savedp=ScalarField(mesh),
+        oldU=VectorField(mesh),physical_diagonal=similar(p.values),relaxed_diagonal=similar(p.values),
         iteration=Ref(0),valid=Ref(false),pref,continuity,fixed)
     PlanarSimpleState(model,config,work)
+end
+
+# Restricted component solve: retain the actual pre-relaxation diagonal and
+# source velocity, including boundary contributions and diagonal-dominance changes.
+function _planar_solve_momentum!(w,U,cfg,time)
+    eqn = w.Ueqn
+    for (a,b) in zip((w.oldU.x,w.oldU.y,w.oldU.z),(U.x,U.y,U.z))
+        copyto!(a.values,b.values)
+    end
+    discretise!(eqn,U,cfg;time)
+    nz = _nzval(eqn.equation.A)
+    ids = eqn.equation.diag_nz
+    residuals = eltype(nz)[]
+    for (j,(dir,field)) in enumerate(((XDir(),U.x),(YDir(),U.y)))
+        update_equation!(eqn,cfg)
+        apply_boundary_conditions!(eqn,cfg.boundaries.U,dir,time,cfg)
+        if j == 1
+            copyto!(w.physical_diagonal,nz[ids])
+            all(x -> isfinite(x) && x > 0,w.physical_diagonal) ||
+                throw(ArgumentError("physical momentum diagonals must be positive and finite"))
+        else
+            nz[ids] == w.physical_diagonal ||
+                throw(ArgumentError("planar SIMPLE requires identical x/y physical momentum diagonals"))
+        end
+        implicit_relaxation_diagdom!(eqn,field.values,cfg.solvers.U.relax,dir,cfg)
+        if j == 1
+            copyto!(w.relaxed_diagonal,nz[ids])
+        else
+            nz[ids] == w.relaxed_diagonal ||
+                throw(ArgumentError("planar SIMPLE requires identical x/y relaxed momentum diagonals"))
+        end
+        update_preconditioner!(eqn.preconditioner,U.mesh,cfg)
+        push!(residuals,solve_system!(eqn,cfg.solvers.U,field,dir,cfg))
+    end
+    residuals[1],residuals[2]
+end
+
+# H! returns H/relaxed_D after pressure-source removal. Undo the complete
+# diagonal augmentation and its old-velocity source, not merely division by alpha.
+function _planar_physical_predictor!(w)
+    D,Dt = w.physical_diagonal,w.relaxed_diagonal
+    for (h,u) in zip((w.Hv.x,w.Hv.y),(w.oldU.x,w.oldU.y))
+        @. h.values = (Dt*h.values - (Dt-D)*u.values)/D
+    end
+    fill!(w.Hv.z.values,0)
+    @. w.rD.values = w.rD.mesh.cell_volume/D
+    all(a -> all(isfinite,a.values),(w.Hv.x,w.Hv.y,w.rD)) ||
+        throw(ArgumentError("nonfinite physical momentum predictor"))
+    nothing
 end
 
 _planar_state_fresh(w,U,p) = w.valid[] && all(a.values == b.values for (a,b) in
@@ -133,7 +187,11 @@ pressure-equation L1 residual below the integrated-flow continuity tolerance;
 this avoids division by a tiny pressure scale near zero-pressure solutions. Histories include only
 executed iterations. Pressure flux correction uses unrelaxed pressure; relaxed
 pressure is used for cell velocity correction. Corrected overlap fluxes are kept
-for the next momentum solve and subsequent calls. No background execution.
+for the next momentum solve and subsequent calls. The cell predictor and pressure
+mobility use the physical pre-relaxation momentum diagonal: the full diagonal
+augmentation and its old-velocity source are removed after the relaxed momentum
+solve. Identical positive x/y physical diagonals are required. Ordinary SIMPLE
+is unchanged. No background execution.
 """
 function planar_simple!(state::PlanarSimpleState; iterations=state.config.runtime.iterations)
     model,cfg,w = state.model,state.config,state.work
@@ -156,10 +214,10 @@ function planar_simple!(state::PlanarSimpleState; iterations=state.config.runtim
     converged = false
     for _ in 1:iterations
         time = w.iteration[]+1
-        ux,uy,_ = solve_equation!(w.Ueqn,U,cfg.boundaries.U,cfg.solvers.U,XDir(),YDir(),ZDir(),cfg;time)
-        inverse_diagonal!(w.rD,w.Ueqn,cfg)
+        ux,uy = _planar_solve_momentum!(w,U,cfg,time)
         remove_pressure_source!(w.Ueqn,w.gradp,cfg)
         H!(w.Hv,U,w.Ueqn,cfg)
+        _planar_physical_predictor!(w)
         interpolate!(w.Uf,w.Hv,cfg)
         correct_boundaries!(w.Uf,w.Hv,cfg.boundaries.U,time,cfg)
         all(iszero,w.Uf.z.values) || throw(ArgumentError("Mesh2 planar SIMPLE requires zero prescribed z velocity"))

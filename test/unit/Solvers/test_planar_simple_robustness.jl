@@ -12,7 +12,7 @@ end
 
 @testset "Planar SIMPLE relaxation and initial-state robustness" begin
     baseline = nothing
-    for (u,p,relaxU,relaxp) in ((0.7,0.,0.7,0.3),(0.2,2.,0.7,0.3),(0.2,2.,0.5,0.2),(1.1,-1.,0.8,0.4))
+    for (u,p,relaxU,relaxp) in ((0.7,0.,0.7,0.3),(0.2,2.,0.7,0.3),(0.2,2.,0.5,0.2),(1.1,-1.,0.8,0.4),(0.7,0.,0.7,0.5))
         model,cfg = PlanarVerificationSetup.channel_case(na=6,nb=11,nx=4,interface_x=0.65,
             initialU=u,initialp=p,relaxU=relaxU,relaxp=relaxp)
         state = PlanarSimpleState(model,cfg;continuity=1e-9)
@@ -24,15 +24,10 @@ end
         @test abs(metrics.boundary_balance) < 1e-10
         @test metrics.unequal_distances
         if baseline === nothing
-            baseline = (copy(model.momentum.U.x.values),copy(model.momentum.U.y.values),copy(model.momentum.p.values),copy(state.work.transport.overlaps))
+            baseline = (copy(model.momentum.U.x.values),copy(model.momentum.U.y.values),copy(model.momentum.p.values),copy(state.work.transport.overlaps),copy(state.work.transport.values))
         else
-            for (a,b) in zip((model.momentum.U.x.values,model.momentum.U.y.values,model.momentum.p.values,state.work.transport.overlaps),baseline)
-                if relaxU == 0.7 && relaxp == 0.3
-                    @test a ≈ b atol=2e-6 rtol=2e-6
-                else
-                    # Characterise, not conceal, under-relaxed predictor-flux sensitivity.
-                    @test maximum(abs,a-b) < 0.02
-                end
+            for (a,b) in zip((model.momentum.U.x.values,model.momentum.U.y.values,model.momentum.p.values,state.work.transport.overlaps,state.work.transport.values),baseline)
+                @test a ≈ b atol=2e-6 rtol=2e-6
             end
         end
         @test metrics.velocity_error < 0.06

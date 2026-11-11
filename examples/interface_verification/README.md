@@ -43,8 +43,8 @@ analytical comparison for the channel profile; finite-domain inlet/outlet condit
 and interface trace approximations may perturb the discrete flow. Outlet cell-centre
 pressure is not expected to be zero just because the boundary pressure is zero.
 
-Representative default results (Float64): 65 cumulative iterations, velocity error
-0.0122, relative pressure-drop error 0.0230, integrated continuity below 1e-12,
+Representative default results (Float64): 54 cumulative iterations, velocity error
+0.0128, relative pressure-drop error 0.0209, integrated continuity below 1e-12,
 interface balance zero to roundoff. Iteration counts and last digits are not guarantees.
 
 ## Refinement study
@@ -60,18 +60,18 @@ Representative relative errors:
 
 | k | Nonconforming velocity | Conforming velocity | Nonconforming pressure drop | Conforming pressure drop |
 |---|---:|---:|---:|---:|
-| 1 | 0.0340 | 0.0272 | 0.00620 | 0.000283 |
-| 2 | 0.0102 | 0.00757 | 0.0144 | 0.0120 |
-| 4 | 0.00248 | 0.00184 | 0.00889 | 0.00906 |
+| 1 | 0.0349 | 0.0272 | 0.00323 | 0.000283 |
+| 2 | 0.0103 | 0.00757 | 0.0128 | 0.0120 |
+| 4 | 0.00249 | 0.00184 | 0.00803 | 0.00906 |
 
-Nonconforming observed velocity orders are approximately 1.74 and 2.03. **Pressure-drop
-error is nonmonotonic**, with observed orders approximately -1.21 and 0.69. Coarse-grid
+Nonconforming observed velocity orders are approximately 1.76 and 2.05. **Pressure-drop
+error is nonmonotonic**, with observed orders approximately -1.99 and 0.68. Coarse-grid
 cancellation, changing interior sampling planes and finite-domain boundary effects
 preclude a clean pressure-order claim. The tests require decreasing velocity errors,
 bounded pressure errors and independent conservation; they do not require second-order
 accuracy. Upwind convection and missing tangential/nonorthogonal reconstruction remain
-limitations. The strong-mismatch case has velocity error 0.0138 and pressure-drop error
-0.0321, despite continuity at roundoff: conservation and accuracy are distinct checks.
+limitations. The strong-mismatch case has velocity error 0.0136 and pressure-drop error
+0.0307, despite continuity at roundoff: conservation and accuracy are distinct checks.
 
 ## Robustness findings and scope
 
@@ -79,14 +79,28 @@ limitations. The strong-mismatch case has velocity error 0.0138 and pressure-dro
 relaxation variations, signed Couette flow with opposing overlaps, pressure-offset
 invariance, and recovery after validation and mid-iteration failures.
 
-At fixed relaxation, different initial states converge to the same fields to tight
-iterative tolerances. Changing momentum relaxation from 0.7 to 0.5 or 0.8 produces
-small but measurable changes in the converged channel fields/fluxes (under 0.02 in
-max absolute difference for the tested case). **Relaxation-independent discrete
-solutions are not established.** The current predictor uses mobility from the
-under-relaxed momentum diagonal; a relaxation-consistent collocated-flux treatment
-is a future solver increment. Tests characterise bounded sensitivity, not equality,
-and do not alter the solver to mask it.
+The restricted solver reconstructs its pressure predictor from the **physical,
+pre-relaxation momentum equation**. It stores physical diagonal D, relaxed diagonal
+Dt and old velocity Uold; after pressure-source removal it computes
+`H0 = (Dt*Hv - (Dt-D)*Uold)/D` and mobility `V/D`. This removes the entire
+relaxation/diagonal-dominance augmentation, not just a factor of alpha. Positive
+identical x/y physical diagonals are required. Both ordinary and overlap face
+predictors, pressure assembly/correction and cell velocity correction use this
+physical predictor/mobility. Relaxation factors must lie in (0,1].
+
+Different initial states, momentum relaxations 0.5/0.7/0.8 and pressure relaxations
+0.2/0.3/0.4/0.5 now converge to agreeing fields and individual/ordinary fluxes within
+2e-6 absolute/relative test tolerances on the tested channel. This is validation
+for the restricted cases, not a general stability guarantee. Sparse-row tests
+independently reassemble the unrelaxed momentum equation, include interface
+neighbours and exercise diagonal-dominance augmentation at alpha=1.
+
+Ordinary SIMPLE is unchanged and still shows relaxation-sensitive converged
+channel solutions; the conforming results above are a diagnostic resolution
+baseline using relaxation 0.7, not the same projection algorithm. Compared with
+the previous relaxed predictor, velocity errors shift slightly (finest 0.00248
+to 0.00249), pressure errors improve in these cases, and the refinement trend is
+preserved. No claim of universal spatial-error improvement is made.
 
 The solver is restricted to steady static planar CPU Mesh2, unit density, positive
 constant viscosity, laminar/isothermal physics, Upwind momentum, Linear diffusion and
