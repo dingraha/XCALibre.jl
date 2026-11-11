@@ -1,9 +1,9 @@
 export PlanarDiffusion, construct_planar_diffusion, interface_diffusion_flux!
 
-"""Scalar, constant-diffusivity coupling for a static straight Mesh2 interface.
+"""Scalar or Cartesian-vector, constant-diffusivity coupling for a static straight Mesh2 interface.
 Use both descriptors returned by `construct_planar_diffusion` in `assign`.
 Only Time and Laplacian{Linear} terms are supported. No convection, pressure
-correction, vector coupling, GPU, or nonorthogonal interface correction is provided.
+correction, GPU, or nonorthogonal interface correction is provided.
 """
 struct PlanarDiffusion{I,V,R<:UnitRange} <: AbstractBoundary
     ID::I
@@ -24,7 +24,7 @@ Adapt.@adapt_structure PlanarDiffusionValue
 """
     construct_planar_diffusion(mesh, patch_a, patch_b; kwargs...)
 
-Return paired scalar diffusion boundaries. Conductance is Γ L/(dA+dB), where
+Return paired scalar or Cartesian-vector diffusion boundaries. Conductance is Γ L/(dA+dB), where
 dA and dB are positive normal distances from owner centres to the overlap.
 This two-point approximation is exact for fields linear in the normal direction,
 but omits tangential/nonorthogonal corrections on skew owner-cell pairs.
@@ -91,7 +91,7 @@ end
 @inline function (bc::PlanarDiffusion)(
     term::Operator{F,P,I,Laplacian{Linear}}, colval, rowptr, nzval,
     cellID, zcellID, cells, faces, fID, i, component, time
-    ) where {F<:ConstantScalar,P<:ScalarField,I}
+    ) where {F<:ConstantScalar,P<:Union{ScalarField,VectorField},I}
     gamma = term.flux.values
     isfinite(gamma) && gamma > 0 || throw(ArgumentError("Planar diffusion requires positive finite diffusivity"))
     v, adj = bc.value, bc.value.coupling.face_adjacency
@@ -110,7 +110,7 @@ end
 
 # Fail explicitly instead of silently treating unsupported operators as insulated faces.
 @inline function (bc::PlanarDiffusion)(term::Operator{F,P,I,O}, args...) where {F,P,I,O}
-    throw(ArgumentError("PlanarDiffusion supports only scalar Linear Laplacian with ConstantScalar diffusivity"))
+    throw(ArgumentError("PlanarDiffusion supports only scalar or vector Linear Laplacian with ConstantScalar diffusivity"))
 end
 @inline function (bc::PlanarDiffusion)(
     term::Operator{F,P,I,<:Time{T}}, colval, rowptr, nzval, cellID, zcellID,
@@ -137,21 +137,51 @@ end
     nothing
 end
 
+# Vector components need not store mesh references; access through their parent.
+_planar_field_arrays(phi::ScalarField) = (phi.values,)
+_planar_field_arrays(phi::VectorField) = (phi.x.values,phi.y.values,phi.z.values)
+_planar_check_flux_output(phi::ScalarField,out) = nothing
+function _planar_check_flux_output(phi::VectorField,out)
+    eltype(out) <: SVector{3} || throw(ArgumentError("vector overlap output must store SVector{3,T}"))
+    all(values -> get_backend(values) isa CPU,_planar_field_arrays(phi)) ||
+        throw(ArgumentError("vector interface flux requires CPU components"))
+end
+
+@inline function boundary_interpolation!(bc::PlanarDiffusion,phif::FaceVectorField,
+    phi::VectorField,boundary_cellsID,time,fID)
+    v,c = bc.value,bc.value.coupling
+    row = v.rows[fID-first(bc.IDs_range)+1]
+    T = eltype(phif.x.values)
+    value,measure = zero(SVector{3,T}),zero(T)
+    for entry in c.face_adjacency.ranges[row]
+        k = c.face_adjacency.overlaps[entry]
+        wa,wb = _planar_weights(v,k)
+        value += c.measure[k]*(wa*phi[c.cell_a[k]]+wb*phi[c.cell_b[k]])
+        measure += c.measure[k]
+    end
+    phif[fID] = value/measure
+    nothing
+end
+
 """
     interface_diffusion_flux!(flux, boundary, phi, diffusivity::ConstantScalar)
 
 Overwrite integrated overlap fluxes with Γ L (φA-φB)/(dA+dB), positive outward
 from A, independently of which paired descriptor is passed. These are physical
 fluxes for -Laplacian; use interface_cell_flux! or interface_face_flux! to gather.
+For VectorField inputs use an output array of SVector{3,T}; components share the
+same conductance in a common Cartesian frame.
 """
 function interface_diffusion_flux!(flux::AbstractVector, bc::PlanarDiffusion,
-    phi::ScalarField, gamma::ConstantScalar)
+    phi::Union{ScalarField,VectorField}, gamma::ConstantScalar)
     v, c = bc.value, bc.value.coupling
     get_backend(flux) isa CPU && _get_backend(phi.mesh) isa CPU ||
         throw(ArgumentError("Planar diffusion flux requires CPU storage"))
     Base.require_one_based_indexing(flux)
     length(flux) == length(c.measure) || throw(DimensionMismatch("incorrect overlap flux length"))
-    Base.mightalias(flux,phi.values) && throw(ArgumentError("flux output must not alias field values"))
+    any(values -> Base.mightalias(flux,values),_planar_field_arrays(phi)) &&
+        throw(ArgumentError("flux output must not alias field values"))
+    _planar_check_flux_output(phi,flux)
     isfinite(gamma.values) && gamma.values > 0 || throw(ArgumentError("diffusivity must be positive and finite"))
     for k in eachindex(flux)
         flux[k] = _planar_conductance(v,k,gamma.values)*(phi[c.cell_a[k]]-phi[c.cell_b[k]])

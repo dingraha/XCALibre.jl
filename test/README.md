@@ -30,7 +30,7 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
-unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve), test_planar_pressure (variable mobility, conservative pressure operator, closed-domain projection)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve), test_planar_pressure (variable mobility, conservative pressure operator, closed-domain projection), test_planar_momentum (Cartesian vector coupling, component consistency, convection–diffusion solves)
 
 unit/IOFormats: test_foam_writer_unset_bcs
 
@@ -46,7 +46,7 @@ gamma = ConstantScalar(2.0)
 eqn = (-Laplacian{Linear}(gamma, phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi, BCs.T)
 ```
 
-This CPU-only boundary uses shared overlap conductances `gamma*length/(distance_a+distance_b)`. It supports scalar `Laplacian{Linear}` with positive constant diffusivity and ignores boundary contributions from `Time` terms. It does not provide convection, vector/pressure coupling, variable diffusivity, mesh motion, or nonorthogonal interface corrections. On skew owner pairs, the two-point approximation is exact only for fields linear in the normal direction. Rebuild boundaries and equations after geometry or ID changes; initialise preconditioners only after constructing the extended matrix.
+This CPU-only boundary uses shared overlap conductances `gamma*length/(distance_a+distance_b)`. It supports scalar or Cartesian-vector `Laplacian{Linear}` with positive constant diffusivity and ignores boundary contributions from `Time` terms. It does not provide convection, pressure coupling, variable diffusivity, mesh motion, or nonorthogonal interface corrections. On skew owner pairs, the two-point approximation is exact only for fields linear in the normal direction. Rebuild boundaries and equations after geometry or ID changes; initialise preconditioners only after constructing the extended matrix.
 
 Recover physical integrated overlap fluxes (positive outward from A) with `interface_diffusion_flux!(flux, pair[1], phi, gamma)` and gather them using the geometry in `pair[1].value.coupling`. Flux recovery is for diagnostics; do not add these contributions to a balance that already includes the assembled interface operator.
 
@@ -73,7 +73,26 @@ Overlap fluxes are integrated volume or mass fluxes, not densities, and are posi
 
 Use `Divergence{Upwind}` or `Divergence{Linear}` in the equation. Recover transported scalar fluxes with `interface_transport_flux!(out, pair[1], phi, transport; scheme=Upwind())` or `scheme=Linear()` to match that equation; existing calls without a keyword default to upwind. Both paired descriptors give the same A-oriented result. Gather for diagnostics only, not as an extra source. `correct_boundaries!` supplies geometric interpolation, not an upwind flux trace. Interface transport has zero column sums (conservation); constant-state preservation additionally requires divergence-free complete cell flux balances.
 
-Support is CPU-only, scalar `Divergence{Upwind}` or `Divergence{Linear}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear convection uses overlap owner weights `distance_b/(distance_a+distance_b)` and `distance_a/(distance_a+distance_b)`, consistent with geometric interpolation. This is exact for normal-linear fields but provides no tangential reconstruction on skew cell pairs. Central/linear convection is not inherently bounded and may produce oscillations in convection-dominated problems. Higher-order convection, pressure correction through `PlanarTransport`, vector coupling, and mesh motion are not supported.
+Support is CPU-only, scalar or Cartesian-vector `Divergence{Upwind}` or `Divergence{Linear}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear convection uses overlap owner weights `distance_b/(distance_a+distance_b)` and `distance_a/(distance_a+distance_b)`, consistent with geometric interpolation. This is exact for normal-linear fields but provides no tangential reconstruction on skew cell pairs. Central/linear convection is not inherently bounded and may produce oscillations in convection-dominated problems. Higher-order convection, pressure correction through `PlanarTransport`, and mesh motion are not supported.
+
+### Static Cartesian-vector momentum
+
+Use the same paired `PlanarTransport` boundaries with `VectorField` and `VectorEquation` for prescribed-flux convection and constant-viscosity diffusion. Each Cartesian component uses the same conservative scalar coefficients; both sides must use a common stationary Cartesian frame. `PlanarDiffusion` also supports vector diffusion without convection.
+
+```julia
+U = VectorField(mesh)
+BCs = assign((U=[pair..., Zerogradient(:outside)],); region=mesh)
+zero_source = VectorField(mesh)
+initialise!(zero_source, SVector(0.0, 0.0, 0.0))
+U_eqn = (Divergence{Upwind}(transport, U) - Laplacian{Linear}(ConstantScalar(0.4), U) == Source(zero_source)) → VectorEquation(U, BCs.U)
+momentum_flux = zeros(SVector{3,Float64}, length(coupling.measure))
+interface_transport_flux!(momentum_flux, pair[1], U, transport; scheme=Upwind())
+interface_diffusion_flux!(momentum_flux, pair[1], U, ConstantScalar(0.4)) # overwrites with diffusion only
+```
+
+Import `StaticArrays` for `SVector` and choose the mesh floating type for output storage. Vector recovery outputs can be passed directly to `interface_cell_flux!` and `interface_face_flux!` with matching vector-valued destination arrays. Do not count both gathers as equation contributions. `correct_boundaries!` supports `FaceVectorField` geometric traces; this is not the upwind transported state or an incompressible predictor-flux implementation.
+
+The normal `Mesh2` vector solve advances x and y only; z assembly/interpolation/recovery are supported but z is not solved by that path. Least-squares reconstruction has not been made interface-aware, and no general tangential-linear accuracy is claimed. Variable viscosity, pressure-gradient/predictor integration, SIMPLE/PISO, and moving-frame transformations remain outside this vector increment.
 
 ## Static planar pressure projection (CPU primitive)
 
@@ -93,7 +112,7 @@ correct_interface_pressure_flux!(transport, predicted_overlaps, pair[1], p, coef
 
 `interface_pressure_flux!(out, pair[1], p, coefficient)` recovers `G*(pA-pB)` oriented outward from A, for either descriptor. The correction operation sets (rather than increments) overlap fluxes from a separately saved predictor and refreshes signed physical face sums. Exterior/interior faces are untouched: callers must also correct ordinary face fluxes with the corresponding assembled pressure coefficients. Full divergence can then be calculated from the physical face fluxes; do not add the overlap gather again. A closed-domain Neumann solve requires a compatible globally balanced predictor and a pressure reference.
 
-This supports CPU scalar `Laplacian{Linear}` and boundary `Time` contributions at unit density only. It is **not** integrated into SIMPLE/PISO: vector momentum coupling, pressure-gradient reconstruction, predictor construction, density weighting, nonorthogonal corrections, moving geometry, GPU, and MPI are not yet supported. Rebuild boundaries/equations after geometry or ID changes.
+This supports CPU scalar `Laplacian{Linear}` and boundary `Time` contributions at unit density only. It is **not** integrated into SIMPLE/PISO: pressure-gradient reconstruction, predictor construction, density weighting, nonorthogonal corrections, moving geometry, GPU, and MPI are not yet supported. Rebuild boundaries/equations after geometry or ID changes.
 
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
