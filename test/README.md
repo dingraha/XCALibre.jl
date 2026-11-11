@@ -30,6 +30,7 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers)
 unit/IOFormats: test_foam_writer_unset_bcs
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
 unit/Preprocess: test_setFields (region initialisation)

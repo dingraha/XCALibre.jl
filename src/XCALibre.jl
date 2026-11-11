@@ -9,6 +9,7 @@ import Adapt: adapt; export adapt
 
 include("Multithread/Multithread.jl")
 include("Mesh/Mesh.jl")
+include("InterfaceCoupling/InterfaceCoupling.jl")
 include("UNV2/UNV2.jl")
 include("UNV3/UNV3.jl")
 include("FoamMesh/FoamMesh.jl")
@@ -30,6 +31,7 @@ include("Mesh/BlockMesher2D/BlockMesher2D.jl")
 using Reexport
 @reexport using XCALibre.Multithread
 @reexport using XCALibre.Mesh
+@reexport using XCALibre.InterfaceCoupling
 @reexport using XCALibre.FoamMesh
 @reexport using XCALibre.Fields
 @reexport using XCALibre.ModelFramework
