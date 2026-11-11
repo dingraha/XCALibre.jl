@@ -16,7 +16,7 @@ struct InterfaceTransportFlux{V,C,M} <: AbstractScalarField
 end
 Adapt.@adapt_structure InterfaceTransportFlux
 
-function InterfaceTransportFlux(mesh::Mesh2, c::PlanarInterface)
+function _validate_interface_mesh(mesh::Mesh2,c::PlanarInterface)
     _get_backend(mesh) isa CPU || throw(ArgumentError("interface transport requires CPU storage"))
     get_backend(c.measure) isa CPU || throw(ArgumentError("interface transport requires CPU coupling storage"))
     for (patch,face,cell) in ((c.patch_a,c.face_a,c.cell_a),(c.patch_b,c.face_b,c.cell_b))
@@ -28,6 +28,12 @@ function InterfaceTransportFlux(mesh::Mesh2, c::PlanarInterface)
     end
     T = _get_float(mesh)
     eltype(c.measure) == T || throw(ArgumentError("coupling and mesh floating types must match"))
+    nothing
+end
+
+function InterfaceTransportFlux(mesh::Mesh2,c::PlanarInterface)
+    _validate_interface_mesh(mesh,c)
+    T = _get_float(mesh)
     InterfaceTransportFlux(zeros(T,length(mesh.faces)),zeros(T,length(c.measure)),c,mesh)
 end
 

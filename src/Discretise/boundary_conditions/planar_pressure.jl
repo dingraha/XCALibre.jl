@@ -21,6 +21,31 @@ function construct_planar_pressure(mesh::Mesh2,a::Symbol,b::Symbol; kwargs...)
         construct_planar_diffusion(mesh,a,b;kwargs...))
 end
 
+"""
+    construct_planar_pressure(momentum_pair::Tuple{PlanarTransport,PlanarTransport})
+
+Reuse a matching momentum boundary pair's coupling and normal distances. Required
+when one InterfaceTransportFlux is used for both convection and pressure
+correction: independently constructed geometry objects are not interchangeable.
+"""
+function construct_planar_pressure(pair::Tuple{PlanarTransport,PlanarTransport})
+    a,b = pair
+    a.value.coupling === b.value.coupling && a.value.side_a != b.value.side_a && a.ID != b.ID ||
+        throw(ArgumentError("momentum descriptors must form a matching opposite-side pair"))
+    for bc in pair
+        expected = bc.value.side_a ? bc.value.coupling.patch_a : bc.value.coupling.patch_b
+        # Before assign, IDs are names; afterwards they are numeric patch IDs.
+        bc.ID isa Integer && bc.ID != expected &&
+            throw(ArgumentError("momentum descriptor assigned to the wrong patch"))
+        rowfaces = bc.value.coupling.face_adjacency.IDs[bc.value.rows]
+        rowfaces == collect(bc.IDs_range) ||
+            throw(ArgumentError("momentum descriptor face range must match its geometry"))
+    end
+    a.value.distance_a === b.value.distance_a && a.value.distance_b === b.value.distance_b ||
+        throw(ArgumentError("momentum pair must share normal distance storage"))
+    map(bc -> PlanarPressure(bc.ID,bc.value,bc.IDs_range),pair)
+end
+
 @inline _diffusion_boundary(bc::PlanarPressure) = PlanarDiffusion(bc.ID,bc.value,bc.IDs_range)
 _extend_matrix(bc::PlanarPressure,mesh,i,j) = _extend_matrix(_diffusion_boundary(bc),mesh,i,j)
 

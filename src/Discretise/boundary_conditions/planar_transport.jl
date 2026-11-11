@@ -1,4 +1,4 @@
-export PlanarTransport, construct_planar_transport, interface_transport_flux!
+export PlanarTransport, construct_planar_transport, interface_transport_flux!, interface_predictor_flux!
 
 """Paired CPU scalar or Cartesian-vector Upwind or Linear transport boundaries, with optional constant
 Linear diffusion and Time terms. Linear convection is not inherently bounded and
@@ -89,6 +89,41 @@ end
 
 @inline function (bc::PlanarTransport)(term::Operator,args...)
     throw(ArgumentError("PlanarTransport supports scalar or vector Upwind or Linear divergence with InterfaceTransportFlux, constant Linear diffusion, and Time only"))
+end
+
+"""
+    interface_predictor_flux!(out, boundary::PlanarTransport, Hv::VectorField)
+
+Overwrite CPU integrated overlap volume fluxes with the normal-distance
+interpolated velocity-like momentum predictor Hv=H/aP dotted with each A-oriented
+area vector. Both descriptors give the same result. Do not multiply Hv by rD
+again. No density, mesh velocity, pressure, or tangential reconstruction is
+included. Physical face storage is untouched; call update_interface_flux! to
+copy results into transport storage and refresh signed interface face sums.
+"""
+function interface_predictor_flux!(out::AbstractVector,bc::PlanarTransport,Hv::VectorField)
+    c,v = bc.value.coupling,bc.value
+    _get_backend(Hv.mesh) isa CPU && get_backend(out) isa CPU &&
+        get_backend(c.measure) isa CPU &&
+        all(values -> get_backend(values) isa CPU,_planar_field_arrays(Hv)) ||
+        throw(ArgumentError("interface predictor requires CPU storage"))
+    Base.require_one_based_indexing(out)
+    length(out) == length(c.measure) || throw(DimensionMismatch("incorrect predictor output length"))
+    any(values -> Base.mightalias(out,values),_planar_field_arrays(Hv)) &&
+        throw(ArgumentError("predictor output must not alias velocity storage"))
+    any(values -> Base.mightalias(out,values),(c.measure,c.centre,c.area_vector,v.distance_a,v.distance_b)) &&
+        throw(ArgumentError("predictor output must not alias geometry storage"))
+    # Geometry stores topology rather than mesh identity: validate against Hv.mesh.
+    _validate_interface_mesh(Hv.mesh,c)
+    eltype(out) <: AbstractFloat || throw(ArgumentError("predictor output must store floating scalars"))
+    proposed = similar(out)
+    for k in eachindex(proposed)
+        wa,wb = _planar_weights(v,k)
+        proposed[k] = dot(wa*Hv[c.cell_a[k]]+wb*Hv[c.cell_b[k]],c.area_vector[k])
+    end
+    all(isfinite,proposed) || throw(ArgumentError("predictor fluxes must be finite and representable"))
+    copyto!(out,proposed)
+    out
 end
 
 @inline boundary_interpolation!(bc::PlanarTransport,phif::FaceScalarField,

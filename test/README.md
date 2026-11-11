@@ -30,7 +30,7 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
-unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve), test_planar_pressure (variable mobility, conservative pressure operator, closed-domain projection), test_planar_momentum (Cartesian vector coupling, component consistency, convection–diffusion solves)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind/linear coupling, unequal-distance interpolation, opposing overlap flows, throughflow solve), test_planar_pressure (variable mobility, conservative pressure operator, closed-domain projection), test_planar_momentum (Cartesian vector coupling, component consistency, convection–diffusion solves), test_planar_predictor (Gauss pressure traces, overlap predictor, momentum-to-projection chain)
 
 unit/IOFormats: test_foam_writer_unset_bcs
 
@@ -112,7 +112,44 @@ correct_interface_pressure_flux!(transport, predicted_overlaps, pair[1], p, coef
 
 `interface_pressure_flux!(out, pair[1], p, coefficient)` recovers `G*(pA-pB)` oriented outward from A, for either descriptor. The correction operation sets (rather than increments) overlap fluxes from a separately saved predictor and refreshes signed physical face sums. Exterior/interior faces are untouched: callers must also correct ordinary face fluxes with the corresponding assembled pressure coefficients. Full divergence can then be calculated from the physical face fluxes; do not add the overlap gather again. A closed-domain Neumann solve requires a compatible globally balanced predictor and a pressure reference.
 
-This supports CPU scalar `Laplacian{Linear}` and boundary `Time` contributions at unit density only. It is **not** integrated into SIMPLE/PISO: pressure-gradient reconstruction, predictor construction, density weighting, nonorthogonal corrections, moving geometry, GPU, and MPI are not yet supported. Rebuild boundaries/equations after geometry or ID changes.
+This supports CPU scalar `Laplacian{Linear}` and boundary `Time` contributions at unit density only. It is **not** integrated into SIMPLE/PISO. The Gauss-gradient and overlap predictor primitives are described below; interface-aware least-squares reconstruction, density weighting, nonorthogonal corrections, moving geometry, GPU, and MPI are not yet supported. Rebuild boundaries/equations after geometry or ID changes.
+
+### Shared geometry and momentum-predictor projection
+
+Construct pressure descriptors from the momentum pair when convection and pressure correction use the same transport field:
+
+```julia
+momentum_pair = construct_planar_transport(mesh, :interface_a, :interface_b)
+pressure_pair = construct_planar_pressure(momentum_pair)
+transport = InterfaceTransportFlux(mesh, momentum_pair[1].value.coupling)
+coefficient = InterfacePressureCoefficient(mesh, pressure_pair[1])
+# After momentum assembly/solve and removal of its pressure source:
+inverse_diagonal!(rD, U_eqn, config) # rD = volume / aP
+H!(Hv, U, U_eqn, config) # Hv is H/aP, already velocity-like
+interpolate!(Uf, Hv, config)
+correct_boundaries!(Uf, Hv, config.boundaries.U, time, config)
+face_flux = FaceScalarField(transport.values, mesh) # wrapper, no copy
+flux!(face_flux, Uf, config) # ordinary predicted faces
+predicted_overlaps = zeros(eltype(transport.overlaps), length(transport.overlaps))
+interface_predictor_flux!(predicted_overlaps, momentum_pair[1], Hv)
+update_interface_flux!(transport, predicted_overlaps) # replace interface face sums
+predicted_faces = copy(transport.values)
+div!(predicted_divergence, face_flux, config)
+update_interface_coefficient!(coefficient, rD)
+# Assemble/solve the pressure equation; correct ordinary faces with their own
+# conductances and saved predicted_faces before correcting the interface:
+correct_interface_pressure_flux!(transport, predicted_overlaps, pressure_pair[1], p, coefficient)
+grad!(gradp, pf, p, config.boundaries.p, time, config) # Grad{Gauss}
+correct_velocity!(U, Hv, gradp, rD, config)
+```
+
+This is a lifecycle sketch, not a complete solver: allocate fields/configuration and perform the pressure solve and ordinary-face corrections explicitly. For ordinary interior faces use `coefficient.values[f]*mesh.face_gDiff[f]*(p[owner]-p[neighbour])`, added to the saved predicted flux. Exterior correction must match its pressure boundary condition; closed zero-normal-flow/Neumann fixtures need no exterior correction. Avoid accumulating corrections or counting overlap gathers in addition to physical face sums.
+
+`interface_predictor_flux!` writes only its output array, for either descriptor side, with `(wA*HvA+wB*HvB)⋅S_overlap` oriented outward from A. It preserves individual opposing flows and includes no density, pressure, or mesh velocity. Do not multiply `Hv` by `rD` again. Shared descriptors can be constructed before or after assignment. Independent momentum/pressure constructors produce distinct coupling objects and cannot be used interchangeably in pressure correction.
+
+For this straight interface, length-averaged geometric pressure traces passed to the existing Gauss path reproduce overlap pressure-area sums. Constant pressure and normal-linear fields with consistent exterior values are tested. Tangential reconstruction and interface-aware least-squares remain unsupported. Conservative pressure-corrected face fluxes satisfy continuity; interpolating the corrected cell velocity generally does **not** reproduce those fluxes on a collocated mesh. Preserve corrected overlap/face flux storage for convection rather than replacing it with velocity-interpolated fluxes.
+
+The tested chain remains CPU-only, static, unit-density, constant-viscosity, and separate from SIMPLE/PISO integration.
 
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)

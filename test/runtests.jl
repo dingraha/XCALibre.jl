@@ -28,6 +28,7 @@ const TIERS = [
         "unit/InterfaceCoupling/test_planar_transport.jl",
         "unit/InterfaceCoupling/test_planar_pressure.jl",
         "unit/InterfaceCoupling/test_planar_momentum.jl",
+        "unit/InterfaceCoupling/test_planar_predictor.jl",
         "unit/IOFormats/test_foam_writer_unset_bcs.jl",
         "unit/Multithread/test_kernel_index_pattern.jl",
         "unit/Preprocess/test_setFields.jl",
