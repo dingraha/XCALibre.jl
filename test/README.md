@@ -30,7 +30,7 @@
 
 ## Index (tier -> folder -> file)
 unit/Mesh: test_mesh_conversion (readers, writers), test_foam_padded_neighbour, test_mesh_reorder, test_face_orientation, test_bounding_box, test_boundary_distance (boundary face delta), test_unv2d_geometry (centroids, face geometry consistency)
-unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency)
+unit/InterfaceCoupling: test_planar_interface (static nonconforming overlap geometry, coverage, deterministic conservative flux gathers), test_planar_diffusion (symmetric implicit scalar coupling, manufactured solution, flux/operator consistency), test_planar_transport (conservative upwind coupling, opposing overlap flows, throughflow solve)
 
 unit/IOFormats: test_foam_writer_unset_bcs
 
@@ -49,6 +49,31 @@ eqn = (-Laplacian{Linear}(gamma, phi) == Source(ConstantScalar(0.0))) → Scalar
 This CPU-only boundary uses shared overlap conductances `gamma*length/(distance_a+distance_b)`. It supports scalar `Laplacian{Linear}` with positive constant diffusivity and ignores boundary contributions from `Time` terms. It does not provide convection, vector/pressure coupling, variable diffusivity, mesh motion, or nonorthogonal interface corrections. On skew owner pairs, the two-point approximation is exact only for fields linear in the normal direction. Rebuild boundaries and equations after geometry or ID changes; initialise preconditioners only after constructing the extended matrix.
 
 Recover physical integrated overlap fluxes (positive outward from A) with `interface_diffusion_flux!(flux, pair[1], phi, gamma)` and gather them using the geometry in `pair[1].value.coupling`. Flux recovery is for diagnostics; do not add these contributions to a balance that already includes the assembled interface operator.
+
+### Static scalar interface transport
+
+Use transport descriptors instead of diffusion-only descriptors when the scalar equation includes convection:
+
+```julia
+pair = construct_planar_transport(mesh, :interface_a, :interface_b)
+coupling = pair[1].value.coupling
+transport = InterfaceTransportFlux(mesh, coupling)
+# Fill ordinary interior and exterior faces with integrated transport fluxes.
+# Example: prescribed unit velocity in the x direction (unit density).
+transport.values .= mesh.face_area .* [n[1] for n in mesh.face_normal]
+update_interface_flux!(transport, [S[1] for S in coupling.area_vector])
+BCs = assign((T=[pair..., Zerogradient(:outside)],); region=mesh)
+phi = ScalarField(mesh)
+eqn = (Divergence{Upwind}(transport, phi) - Laplacian{Linear}(ConstantScalar(0.4), phi) == Source(ConstantScalar(0.0))) → ScalarEquation(phi, BCs.T)
+```
+
+Choose actual inlet/outlet boundaries for a throughflow solve; the exterior condition above only illustrates assignment. Use a nonsymmetric linear solver, such as `Bicgstab()`, for convection.
+
+Overlap fluxes are integrated volume or mass fluxes, not densities, and are positive outward from A. Call `update_interface_flux!` after changing prescribed overlap fluxes; it also refreshes physical interface face sums without changing other faces or the sparse graph. Assembly uses overlap fluxes individually, so opposing flows on one physical face retain distinct upwind donors. The flux field and boundaries must reference the same coupling object. Initially one coupling per transport field is supported.
+
+Recover transported scalar fluxes with `interface_transport_flux!(out, pair[1], phi, transport)`; both paired descriptors give the same A-oriented result. Gather for diagnostics only, not as an extra source. `correct_boundaries!` supplies geometric interpolation, not an upwind flux trace. Interface transport has zero column sums (conservation); constant-state preservation additionally requires divergence-free complete cell flux balances.
+
+Support is CPU-only, scalar `Divergence{Upwind}`, optional positive constant `Laplacian{Linear}`, and `Time` boundary terms. Linear/higher-order convection, pressure correction, vector coupling, and mesh motion are not supported.
 
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
