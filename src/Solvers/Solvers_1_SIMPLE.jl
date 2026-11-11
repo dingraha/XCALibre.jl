@@ -60,6 +60,9 @@ function setup_incompressible_solvers(
     )
 
     (; solvers, schemes, runtime, hardware, boundaries) = config
+    if any(bc -> bc isa PlanarTransport, boundaries.U) || any(bc -> bc isa PlanarPressure, boundaries.p)
+        throw(ArgumentError("planar interfaces require PlanarSimpleState/planar_simple!; ordinary SIMPLE/PISO is unsupported"))
+    end
 
     @info "Extracting configuration and input fields..."
 

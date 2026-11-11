@@ -149,7 +149,27 @@ This is a lifecycle sketch, not a complete solver: allocate fields/configuration
 
 For this straight interface, length-averaged geometric pressure traces passed to the existing Gauss path reproduce overlap pressure-area sums. Constant pressure and normal-linear fields with consistent exterior values are tested. Tangential reconstruction and interface-aware least-squares remain unsupported. Conservative pressure-corrected face fluxes satisfy continuity; interpolating the corrected cell velocity generally does **not** reproduce those fluxes on a collocated mesh. Preserve corrected overlap/face flux storage for convection rather than replacing it with velocity-interpolated fluxes.
 
-The tested chain remains CPU-only, static, unit-density, constant-viscosity, and separate from SIMPLE/PISO integration.
+The tested primitives remain CPU-only, static, unit-density, and constant-viscosity. The restricted SIMPLE entry point below integrates them; ordinary `run!` and transient PISO do not support these interfaces.
+
+### Restricted static planar SIMPLE
+
+`test/unit/Solvers/test_planar_simple.jl` exercises the first solver integration: nonconforming constant throughflow and viscous channel flow, comparison with ordinary conforming SIMPLE, integrated continuity, all-Neumann compatibility, validation errors, split-run continuation and reinitialisation.
+
+Build momentum descriptors and pressure descriptors sharing their geometry as above, then `assign` them alongside exterior boundaries in `config.boundaries` before creating state:
+
+```julia
+state = PlanarSimpleState(model, config; continuity=1e-9)
+residuals = planar_simple!(state; iterations=500)
+@show residuals.converged residuals.continuity[end]
+# Continue using the same state: individual corrected overlaps are retained.
+more = planar_simple!(state; iterations=100)
+```
+
+Requires steady CPU `Mesh2`, laminar/isothermal incompressible physics, unit density, constant positive viscosity, Upwind momentum convection, Linear diffusion and unlimited Gauss gradients. Prescribed velocity (`Dirichlet`/`DirichletFunction`, zero z) requires pressure `Zerogradient`; velocity `Zerogradient`/`Outlet` permits fixed `Dirichlet` or homogeneous `Zerogradient` pressure. A velocity zero-gradient boundary is not an impermeable wall: prescribe zero velocity for a no-slip wall. No additional momentum sources, transpose-stress correction, SIMPLEC, nonorthogonal correction, output/postprocessing, file restart, transient stepping, or moving geometry. Set `write_interval=-1` and leave postprocessing unset. Unsupported options/boundaries are rejected. All-Neumann pressure requires `pref` and a globally balanced predictor; fixed-pressure boundaries must not be combined with `pref`.
+
+The state allocates extended equations before initialising preconditioners, refreshes mobility/conductance before each pressure assembly, and corrects fluxes using **unrelaxed** pressure before relaxing pressure for Gauss velocity correction. Interface correction runs once per coupling. Convergence requires momentum residual targets, a pressure residual target (normalised or absolute), and a continuity tolerance. `continuity` is the maximum absolute **integrated** cell volume-flow imbalance, not volume-normalised divergence. `p_absolute` reports the L1 initial pressure-equation residual; allowing it below the same tolerance avoids a normalised residual stagnating near a zero-pressure solution.
+
+Histories contain executed iterations only. The state retains cumulative iteration time across calls. Changed cell velocity/pressure invalidates continuation and rebuilds initial fluxes; failures also invalidate it. Rebuild state after mesh, boundary, geometry or configuration changes, and do not mutate its working flux arrays. Physical-face diagnostics are copied to `model.momentum.mdotf`, but cannot recreate overlaps. Use `state.work.transport` for overlap diagnostics, and retain the same state for continuation—not ordinary `run!`.
 
 ## Remaining test index
 unit/Multithread: test_kernel_index_pattern (source scan: `@index` bound on its own)
