@@ -25,6 +25,7 @@ const TIERS = [
         "unit/Mesh/test_unv2d_geometry.jl",
         "unit/InterfaceCoupling/test_planar_interface.jl",
         "unit/InterfaceCoupling/test_circular_interface.jl",
+        "unit/InterfaceCoupling/test_circular_metrics.jl",
         "unit/InterfaceCoupling/test_planar_diffusion.jl",
         "unit/InterfaceCoupling/test_planar_transport.jl",
         "unit/InterfaceCoupling/test_planar_pressure.jl",

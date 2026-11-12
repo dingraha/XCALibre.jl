@@ -10,5 +10,6 @@ include("InterfaceCoupling_0_types.jl")
 include("InterfaceCoupling_1_planar.jl")
 include("InterfaceCoupling_2_flux.jl")
 include("InterfaceCoupling_3_circular.jl")
+include("InterfaceCoupling_4_circular_metrics.jl")
 
 end

@@ -45,15 +45,71 @@ The arc moment differs from chord-midpoint times chord-area-vector. Replacing
 chord surfaces with arcs changes geometric moments and enclosed volume. This
 constructor deliberately leaves mesh coordinates, face metrics and polygonal
 cell volumes unchanged; it must not be treated as a curved-volume mesh conversion.
+The separate metric snapshot below corrects volumes without modifying the mesh.
 Nor is one scalar physical-face trace sufficient in general to reproduce the
 sum of overlap pressure times differently directed overlap area vectors.
 
-Before solver integration we must choose consistent cell volume/moment and
-pressure-gradient treatment, review diffusion/mobility and skewness, and use an
-interface-aware pressure-area gather that replaces the ordinary interface-face
-contribution (never counts it twice). In particular `area_vector/measure` is NOT
+The snapshot and gradient primitive below establish a curved volume/moment and
+pressure-area integration treatment. Before solver integration we still need
+cell-pressure reconstruction, corrected sample locations/centroids as appropriate,
+and diffusion/mobility and skewness review. All solver volume consumers must use
+the same geometry; this is not yet connected to source assembly or projection. In particular `area_vector/measure` is NOT
 a unit normal, so existing planar distance/conductance formulas cannot be reused
 unchanged.
+
+## Curved metrics and pressure-area gradient primitive
+
+```julia
+metrics = construct_circular_metrics(mesh, coupling)
+pressure_area = fill(zero(SVector{3,Float64}), length(coupling.measure))
+gradient = fill(zero(SVector{3,Float64}), length(mesh.cells))
+circular_pressure_area!(pressure_area, metrics.coupling, 2.0, (0.7, -0.3, 0.0))
+face_pressure = [2.0 + dot(SVector(0.7, -0.3, 0.0), x-metrics.coupling.origin) for x in mesh.face_centre]
+circular_gauss_gradient!(gradient, metrics, face_pressure, pressure_area)
+```
+
+Use `StaticArrays` and `LinearAlgebra` for this illustrative affine-field example.
+No cell values or boundary descriptors are interpolated by these primitives.
+
+`CircularMetrics` snapshots both the coupling and ordinary face geometry. It
+stores original polygon volumes, corrected volumes, signed volume corrections,
+and surface-moment corrections. For each ORIGINAL interface face, spanning d:
+
+`delta_volume = sign * R^2 * (d - sin(d))/2`.
+
+The same change in its pressure-area moment is `delta_volume * diag(1,1,0)`.
+The correction must be computed once per complete face, not separately per
+overlap: overlap chord segments do not collectively reproduce the original
+face's chord moment. This matters particularly at the angular seam.
+
+Construction revalidates coupling with its original construction tolerances,
+checks ordinary chord geometry, closed cell vector sums, original polygon moment/
+volume identities, curved moment identities and positive finite corrected volumes.
+Metric-check tolerances are separate from the coupling's topology tolerances.
+Mesh arrays and existing solvers remain unchanged; cell centroids are not corrected.
+
+For the affine field `p(x) = p0 + dot(g,x-reference)`, exact overlap integrals are
+`p0*S + (M-reference*S')'*g`. `circular_pressure_area!` computes these shared
+A-oriented vectors. It is an analytical/reconstructed-affine primitive, not a
+production pressure interpolation scheme. `p(arc centroid)*S` generally misses
+the position/normal correlation and is not affine-exact.
+
+`circular_gauss_gradient!` integrates pressure traces on ordinary straight faces,
+replaces interface-face contributions with the supplied individual overlap
+pressure-area integrals, and divides by corrected volume. Interface entries in
+the ordinary face-pressure array are ignored (even NaN is allowed there). All
+cells are overwritten; accumulation order is deterministic. Both numerical
+primitives validate inputs and compute into temporary output before copying,
+and reject output aliasing inputs/geometry. Snapshot arrays are read-only by
+contract; rebuild rather than mutating them.
+
+`test_circular_metrics.jl` validates affine x/y gradients, constant pressures,
+pressure-offset invariance, equal-and-opposite integrals, translated circles,
+numeric types, frozen alignments, volume/moment corrections and failure atomicity.
+It deliberately demonstrates the error from dividing exact arc pressure-area
+integrals by uncorrected polygon volumes. These are integration tests with exact
+manufactured traces, not a claim of accuracy for interpolated cell pressure or
+an integrated circular SIMPLE solver.
 
 ## Rebuild lifecycle
 

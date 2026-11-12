@@ -30,6 +30,8 @@ struct CircularInterface{I,VI,VF,VV,VM,A,T,V}
     cell_adjacency::A
     radius::T
     origin::V
+    validation_atol::T
+    validation_rtol::T
 end
 Adapt.@adapt_structure CircularInterface
 
@@ -164,7 +166,7 @@ function construct_circular_interface(mesh::Mesh2,a::Symbol,b::Symbol;
     end
     length(adj.IDs) == length(fa)+length(fb) || _circular_error("uncovered face")
     CircularInterface(I(pa),I(pb),aa,bb,ca,cb,lengths,centroids,mids,vectors,moments,
-        los,his,adj,_interface_adjacency(ca,cb),R,O)
+        los,his,adj,_interface_adjacency(ca,cb),R,O,T(atol),T(rtol))
 end
 
 construct_circular_interface(mesh::AbstractMesh,a::Symbol,b::Symbol;kwargs...) =
