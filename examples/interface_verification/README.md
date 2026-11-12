@@ -1,7 +1,9 @@
 # Static planar-interface verification
 
 A separate [circular geometry prototype](circular_geometry.md) validates shared
-angular overlaps and surface metrics only; it does not extend the planar solver.
+angular overlaps, consistent curved metrics, standalone operators and a separate
+restricted static circular SIMPLE path; it does not extend the planar solver.
+See [static circular Couette verification](circular_simple.md).
 
 These CPU examples build their own meshes and write no output files. Use an environment
 containing XCALibre and its dependencies:

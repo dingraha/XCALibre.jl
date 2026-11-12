@@ -257,8 +257,8 @@ can smear physical gradient jumps, so general curved/skewed discontinuous-field
 accuracy is NOT claimed.
 
 The standalone momentum primitives below add integrated momentum assembly and
-physical-diagonal mobility. Coupled cell velocity correction, SIMPLE sequencing
-and lifecycle/continuation rules remain separate work. Existing planar/ordinary
+physical-diagonal mobility. The separate [static circular SIMPLE path](circular_simple.md)
+adds coupled correction, sequencing and continuation rules. Existing planar/ordinary
 solvers remain unchanged; do not pass snapshots into their pressure paths.
 
 ## Standalone circular momentum and physical predictor
@@ -334,8 +334,10 @@ Identical trial velocities give the same recovered physical predictor regardless
 of relaxation; different relaxed solves can and generally DO give different
 velocities/predictors. A test-only deferred viscous solve converges to affine
 Cartesian velocity at these relaxation values; this is not coupled SIMPLE or a
-general stability claim. Next: consistent cell velocity correction, coupling
-sequencing, continuation rules and coupled-flow verification before motion/ALE.
+general stability claim. The separate [restricted static circular SIMPLE path](circular_simple.md) now
+adds consistent cell velocity correction, coupling sequencing, continuation and
+coupled-flow verification. These standalone primitives remain independently usable;
+existing ordinary/planar solvers are unchanged. Motion/ALE is not supported.
 
 ## Rebuild lifecycle
 

@@ -18,6 +18,7 @@ using SparseMatricesCSR
 using XCALibre.Multithread
 using XCALibre.Multithread: _sized
 using XCALibre.Mesh
+using XCALibre.InterfaceCoupling
 using XCALibre.Fields
 import XCALibre.Fields: field_values, transpose_values
 import XCALibre.Calculate: _kernel_values, _boundary_sngrad, _patch_gradient, div_tensor_periodic!
@@ -42,6 +43,7 @@ include("Solvers_0_viscous_stress.jl")
 include("Solvers_1_SIMPLE-MRF.jl")
 include("Solvers_1_SIMPLE.jl")
 include("Solvers_1_planar_SIMPLE.jl")
+include("Solvers_1_circular_SIMPLE.jl")
 include("Solvers_1_LAPLACE.jl")
 include("Solvers_1_CSIMPLE.jl")
 include("Solvers_2_PISO.jl")
