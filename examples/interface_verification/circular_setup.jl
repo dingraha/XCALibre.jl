@@ -36,11 +36,14 @@ function circular_annulus_mesh(;na=16,nb=19,nra=3,nrb=3,phase=0.13,
 end
 
 function circular_couette_case(;na=16,nb=19,nra=3,nrb=3,phase=0.13,omega=0.1,nu=1.,
-    relaxation_U=0.7,relaxation_p=0.3,initial_pressure=0.,reference_pressure=0.,kwargs...)
+    relaxation_U=0.7,relaxation_p=0.3,initial_pressure=0.,reference_pressure=0.,
+    wall_pressure=:homogeneous,kwargs...)
     mesh=circular_annulus_mesh(;na,nb,nra,nrb,phase)
     c=construct_circular_interface(mesh,:interface_a,:interface_b;centre=(0.,0.,0.),radius=1.)
     r=construct_circular_reconstruction(mesh,c)
-    h=construct_circular_pressure_geometry(mesh,c,fill(:neumann,length(r.exterior_faces)))
+    wall_pressure in (:homogeneous,:analytical) || throw(ArgumentError("unsupported wall pressure mode"))
+    kind=wall_pressure==:analytical ? :normal_gradient : :neumann
+    h=construct_circular_pressure_geometry(mesh,c,fill(kind,length(r.exterior_faces)))
     m=construct_circular_momentum_geometry(h,fill(:dirichlet,length(r.exterior_faces)))
     a,b=0.5,1.5;A=-omega*a^2/(b^2-a^2);B=omega*a^2*b^2/(b^2-a^2)
     exact_velocity(x)=begin
@@ -49,9 +52,13 @@ function circular_couette_case(;na=16,nb=19,nra=3,nrb=3,phase=0.13,omega=0.1,nu=
     end
     primitive(radius)=A^2*radius^2/2+2A*B*log(radius)-B^2/(2radius^2)
     values=[norm(x)<1 ? omega*SVector(-x[2],x[1],0.) : SVector(0.,0.,0.) for x in r.exterior_points]
+    pressure_values=[wall_pressure==:homogeneous ? 0. :
+        (A*norm(x)+B/norm(x))^2/norm(x)*dot(x/norm(x),normalize(r.metrics.face_area_vector[j]))
+        for (x,j) in zip(r.exterior_points,r.exterior_faces)]
+    exact_gradient(x)=(A*norm(x)+B/norm(x))^2/norm(x)*(x/norm(x))
     state=CircularSimpleState(m,fill(SVector(0.,0.,0.),length(r.points)),fill(initial_pressure,length(r.points)),
-        values,zeros(length(values)),nu;reference=Dict(1=>reference_pressure),relaxation_U,relaxation_p,kwargs...)
-    (;mesh,coupling=c,state,exact_velocity,primitive)
+        values,pressure_values,nu;reference=Dict(1=>reference_pressure),relaxation_U,relaxation_p,kwargs...)
+    (;mesh,coupling=c,state,exact_velocity,primitive,exact_gradient,wall_pressure)
 end
 
 function circular_couette_errors(case)
@@ -60,5 +67,8 @@ function circular_couette_errors(case)
     velocity=sqrt(sum(r.metrics.volume.*norm.(s.velocity-exact).^2)/sum(r.metrics.volume.*norm.(exact).^2))
     pressure_exact=[case.primitive(norm(x))-case.primitive(norm(r.points[1]))+s.config.reference[1] for x in r.points]
     pressure=maximum(abs,s.pressure-pressure_exact)
-    (;velocity,pressure)
+    gradient=fill(SVector(0.,0.,0.),length(s.pressure))
+    circular_pressure_gradient!(gradient,s.geometry.pressure,s.pressure,s.config.pressure_values)
+    pressure_gradient=maximum(norm,gradient-case.exact_gradient.(r.points))
+    (;velocity,pressure,pressure_gradient)
 end

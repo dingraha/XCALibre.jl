@@ -5,7 +5,7 @@ cell point values and individual conservative overlap fluxes. No model/run!,
 output, motion, sources or transient integration. Arrays in geometry/config are
 read-only by contract; construct a new state after geometry/config changes.
 Only mutate velocity/pressure between calls: this reinitialises continuation.
-Boundary pairs: prescribed velocity/homogeneous pressure Neumann, or homogeneous
+Boundary pairs: prescribed velocity/homogeneous or prescribed-gradient pressure, or homogeneous
 velocity Neumann/fixed pressure. Backflow is rejected. One velocity anchor per
 component and one reference per pressure-unanchored component are required.
 Tolerances are absolute integrated momentum/flow and point-field-change units.
@@ -37,7 +37,7 @@ function CircularSimpleState(m::CircularMomentumGeometry,U::AbstractVector,p::Ab
     pressure_sweeps isa Integer && pressure_sweeps>0 || throw(ArgumentError("positive pressure sweep count required"))
     for k in eachindex(m.velocity.boundary_kind)
         u,q=m.velocity.boundary_kind[k],m.pressure.boundary_kind[k]
-        (u==:dirichlet && q==:neumann) || (u==:neumann && q==:dirichlet) ||
+        (u==:dirichlet && q in (:neumann,:normal_gradient)) || (u==:neumann && q==:dirichlet) ||
             throw(ArgumentError("unsupported coupled boundary pair"))
     end
     h=m.velocity; anchored=falses(length(U))
@@ -100,6 +100,13 @@ function circular_simple!(s::CircularSimpleState;iterations=100)
         terms=circular_momentum_terms(m,U,cfg.velocity_values,p,cfg.pressure_values,s.faces,s.overlaps,cfg.viscosity)
         step=circular_momentum_solve(terms,U;relaxation=cfg.relaxation_U)
         pred=circular_momentum_predictor_flux(m,step.H0,cfg.velocity_values)
+        # Add the opposite of the fixed pressure derivative flux so recovery
+        # preserves prescribed boundary flow, including impermeable walls.
+        for (k,j) in enumerate(m.pressure.exterior_faces)
+            m.pressure.boundary_kind[k]==:normal_gradient || continue
+            a=m.pressure.reconstruction.metrics.owner_a[j]
+            pred.faces[j]+=step.mobility[a]*norm(m.pressure.reconstruction.metrics.face_area_vector[j])*cfg.pressure_values[k]
+        end
         projection=circular_pressure_project(m.pressure,step.mobility,cfg.pressure_values,pred.faces,pred.overlaps;
             initial=p,reference=cfg.reference,max_sweeps=cfg.pressure_sweeps,tolerance=cfg.pressure_tolerance)
         projection.converged || throw(ErrorException("circular SIMPLE pressure projection did not converge"))

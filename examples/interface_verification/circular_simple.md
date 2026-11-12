@@ -27,7 +27,7 @@ changes; the snapshot does not track live mesh mutations.
 Restrictions: static CPU Mesh2, unit density, positive constant viscosity, Upwind
 convection, componentwise corrected viscous diffusion, fixed boundary data. No
 sources, transient terms, transpose stress, turbulence, callbacks, output/restart,
-SIMPLEC, motion or ALE. Velocity Dirichlet requires pressure homogeneous Neumann;
+SIMPLEC, motion or ALE. Velocity Dirichlet requires pressure homogeneous Neumann or `:normal_gradient`;
 velocity homogeneous Neumann requires pressure Dirichlet. Neumann velocity backflow
 is rejected. Each component needs a velocity anchor, and each pressure-unanchored
 component exactly one reference, supplied as `reference=Dict(cell=>pressure)`.
@@ -73,8 +73,10 @@ velocity, drives the next convection operator.
 For inner angular speed omega=0.1 and nu=1, compare against circular-domain
 u_theta=A*r+B/r, A=-omega*a^2/(b^2-a^2), B=omega*a^2*b^2/(b^2-a^2).
 Integrating dp/dr=u_theta^2/r gives p=A^2*r^2/2+2*A*B*log(r)-B^2/(2*r^2)+C.
-Pressure is compared at a shared cell reference gauge. Velocity error is corrected-
-volume-weighted relative L2 at existing cell points; pressure error is max absolute.
+Pressure is compared at a shared cell reference gauge (equivalently, errors in
+pressure differences relative to that cell). Velocity error is corrected-volume-
+weighted relative L2 at existing cell points; pressure error is max absolute.
+`pressure_gradient` reports max absolute reconstructed Gauss-gradient error.
 
 Default na=16/nb=19 and three radial layers per zone converges in 46 iterations,
 with velocity error about 0.07469 and pressure error 0.001216. Tested U/p relaxation
@@ -93,13 +95,68 @@ Velocity decreases roughly quadratically in this study. Pressure is NOT convergi
 monotonically. Crucially, the supported homogeneous wall pressure Neumann condition
 omits the exact radial dp/dr of rotating Couette flow. Along with wall faceting and
 low-order predictor interpolation, this prevents interpreting these pressure errors
-as an order study of the exact continuum problem. Supporting momentum-consistent
-nonzero wall pressure derivatives is future work; do not weaken convergence checks
-to conceal this limitation. Frozen alignments, gauge invariance, split continuation,
+as an order study of the exact continuum problem. The prescribed-gradient verification below now permits nonzero wall derivatives;
+an automatically momentum-derived general wall condition remains future work.
+Do not weaken convergence checks to conceal this limitation. Frozen alignments, gauge invariance, split continuation,
 changed-field resets, pressure-sweep exhaustion and failure recovery are tested.
 Constant Cartesian flow also verifies prescribed and mixed no-backflow outlet
 boundaries. None of these tests represents moving meshes or GCL validation.
 
 Existing ordinary and planar solvers are unchanged. Before broadening this path,
-address wall pressure consistency, larger/nonorthogonal cases and pressure accuracy;
+address automatic wall pressure consistency, larger/nonorthogonal cases and pressure accuracy;
 actual sliding motion, conservative transfer and ALE/GCL remain separate milestones.
+
+## Prescribed total-pressure derivatives
+
+Pressure geometry now also accepts `:normal_gradient`. Its boundary value is the
+prescribed outward-normal derivative at the ordinary chord-face centre, not a
+pressure value. Existing `:neumann` remains exactly homogeneous and rejects
+nonzero data. The boundary-aware LSQ RHS uses g_n*n. The Gauss pressure trace uses
+owner tangential extrapolation plus g_n times the normal owner-to-face distance.
+The integrated pressure flux is -r_owner*face_area*g_n, stored identically in
+assembly and recovery. Projection compatibility includes this fixed contribution.
+
+In SIMPLE, prescribed velocity is paired with this pressure condition. The saved
+pressure-free wall predictor is q_wall+r_owner*face_area*g_n. Pressure recovery
+subtracts the same term, retaining prescribed wall flow without leakage. Mobility
+is frozen through each inner projection; boundary data are fixed state snapshots.
+External callers of the standalone projection must supply their own consistent
+predictor. This is a prescribed total-pressure condition, not a pressure-correction
+condition and not yet an automatically derived wall-normal momentum model.
+
+`circular_couette_case(wall_pressure=:analytical)` supplies
+u_theta(r)^2/r * dot(e_r,n_wall) at actual chord centres with actual outward
+normals. The inner derivative is negative. The exact circular stationary outer
+wall derivative is zero, but its chord-centre sampled derivative need not be
+exactly zero. This sampling and polygon wall geometry remain approximations.
+Default `wall_pressure=:homogeneous` preserves the previous verification case.
+
+Run the side-by-side study:
+
+```sh
+julia --threads=4 --project=<environment> examples/interface_verification/circular_wall_pressure.jl
+```
+
+Same fixed-domain refinement as above:
+
+| k | Homogeneous pressure error | Analytical-gradient pressure error | Analytical-gradient max gradient error |
+|---|---:|---:|---:|
+| 1 | 0.0014164 | 0.0012358 | 0.0049449 |
+| 2 | 0.0011912 | 0.0011007 | 0.0084286 |
+| 4 | 0.0012015 | 0.0011531 | 0.0164290 |
+
+Velocity errors and iteration counts are nearly unchanged. Analytical derivatives
+reduce pressure-difference errors by about 13%, 8% and 4%, but do NOT remove the
+plateau. Max Gauss-gradient errors grow under refinement in both modes. This is
+an unresolved accuracy issue even though momentum/pressure/continuity residuals
+converge tightly. No pressure or gradient convergence claim is made. The wall BC
+mismatch was therefore not the sole or dominant fine-grid error in this study.
+Investigating the physical-predictor/pressure-gradient fixed point, boundary
+localisation of gradient errors and a consistent reconstructed predictor is the
+next diagnostic task, separate from implementing automatic wall derivatives.
+
+Tests cover affine LSQ and Gauss reproduction, variable-mobility assembly/recovery,
+nonzero derivative compatibility (including an incompatible predictor alone),
+mixed Dirichlet/gradient boundaries, wall-flow preservation, gauge/relaxation
+agreement, continuation and failure reset. These establish discrete consistency,
+not general curved-flow accuracy or stability.

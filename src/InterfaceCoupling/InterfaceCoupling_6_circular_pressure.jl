@@ -4,7 +4,8 @@ export CircularPressureTerms, circular_pressure_terms, circular_pressure_flux
 export circular_pressure_project
 
 """Static CPU pressure snapshot. `boundary_kind` follows `exterior_faces` order:
-`:dirichlet` (face-centre point value) or `:neumann` (homogeneous normal derivative).
+`:dirichlet` (face-centre point value), `:neumann` (homogeneous normal derivative),
+or `:normal_gradient` (prescribed outward-normal derivative).
 All geometry arrays are read-only by contract. Cell pressures are point samples,
 not curved-cell averages. Rebuild after geometry/IDs or boundary kinds change.
 No momentum, SIMPLE, ALE or automatic mesh change detection."""
@@ -65,7 +66,7 @@ end
                                         min_alignment=0.05, condition_limit=1e6)
 
 Validate all ordinary/overlap splits and replace exterior pressure-sample LSQ
-rows by normal-derivative rows on homogeneous Neumann faces. Neumann rows are
+rows by normal-derivative rows on homogeneous or prescribed-gradient faces. Neumann rows are
 unit-normal rows with unit weight; pressure-difference rows use inverse distance
 squared weights. Reject singular/ill-conditioned stencils, without regularisation.
 Boundary kinds must cover every ordinary exterior face, in ascending face-ID order.
@@ -73,7 +74,7 @@ Boundary kinds must cover every ordinary exterior face, in ascending face-ID ord
 function construct_circular_pressure_geometry(mesh::Mesh2,c::CircularInterface,kinds::AbstractVector;
     min_alignment=0.05,condition_limit=1e6)
     _circular_input(kinds)
-    all(k -> k in (:dirichlet,:neumann),kinds) || _reconstruction_error("unsupported pressure boundary kind")
+    all(k -> k in (:dirichlet,:neumann,:normal_gradient),kinds) || _reconstruction_error("unsupported pressure boundary kind")
     # The general primitive validates its sample stencil too. The boundary-aware
     # normal matrix is independently validated below, after replacing Neumann rows.
     r = construct_circular_reconstruction(mesh,c;condition_limit)
@@ -113,7 +114,7 @@ function construct_circular_pressure_geometry(mesh::Mesh2,c::CircularInterface,k
             G += d*d'/dot(d,d)
         end
         for j in r.exterior_rows[i]
-            v = kinds[j] == :neumann ? normalize(m.face_area_vector[r.exterior_faces[j]]) :
+            v = kinds[j] != :dirichlet ? normalize(m.face_area_vector[r.exterior_faces[j]]) :
                 r.exterior_points[j]-r.points[i]
             d = SVector{2,T}(v[1],v[2])
             G += d*d'/dot(d,d)
@@ -129,12 +130,13 @@ function _pressure_data(h,p,values)
     length(p) == length(h.reconstruction.points) && length(values) == length(h.exterior_faces) ||
         throw(DimensionMismatch("incorrect pressure or boundary data length"))
     all(isfinite,p) && all(isfinite,values) || _reconstruction_error("nonfinite pressure/boundary data")
-    all(j -> h.boundary_kind[j] == :dirichlet || iszero(values[j]),eachindex(values)) ||
+    all(j -> h.boundary_kind[j] != :neumann || iszero(values[j]),eachindex(values)) ||
         _reconstruction_error("Neumann boundary values must be exactly zero")
 end
 
 """Failure-atomic boundary-aware LSQ. Dirichlet values follow exterior_faces;
-Neumann entries must be zero and constrain the NORMAL derivative, not tangential
+Homogeneous Neumann entries must be zero; :normal_gradient entries prescribe
+outward-normal derivatives. Both constrain the NORMAL derivative, not tangential
 variation or a displaced pressure difference."""
 function circular_pressure_reconstruct!(out::AbstractVector,h::CircularPressureGeometry,p::AbstractVector,values::AbstractVector)
     _pressure_data(h,p,values)
@@ -148,9 +150,13 @@ function circular_pressure_reconstruct!(out::AbstractVector,h::CircularPressureG
             rhs += (p[j]-p[i])*d/dot(d,d)
         end
         for j in r.exterior_rows[i]
-            h.boundary_kind[j] == :neumann && continue # zero derivative RHS
-            d = SVector{2,T}((r.exterior_points[j]-r.points[i])[1:2])
-            rhs += (values[j]-p[i])*d/dot(d,d)
+            if h.boundary_kind[j] == :dirichlet
+                d = SVector{2,T}((r.exterior_points[j]-r.points[i])[1:2])
+                rhs += (values[j]-p[i])*d/dot(d,d)
+            else
+                n = normalize(r.metrics.face_area_vector[r.exterior_faces[j]])
+                rhs += values[j]*SVector{2,T}(n[1],n[2])
+            end
         end
         g = h.inverse[i]*rhs
         proposed[i] = SVector(g[1],g[2],zero(T))
@@ -164,8 +170,8 @@ end
     circular_pressure_gradient!(out, geometry, pressure, boundary_values)
 
 Complete cell-data -> LSQ -> reconstructed ordinary/circular traces -> Gauss chain.
-Dirichlet traces are supplied chord-centre values; Neumann traces tangentially
-extrapolate owner LSQ gradients. Ordinary internal traces blend owner affine
+Dirichlet traces are supplied chord-centre values; derivative-boundary traces
+use owner LSQ tangential extrapolation plus the prescribed normal derivative. Ordinary internal traces blend owner affine
 polynomials. Circular pressure-area integrals use exact moments. Divide only by
 corrected snapshot volumes. Does not imply LSQ and Gauss agree for general fields.
 """
@@ -187,7 +193,7 @@ function circular_pressure_gradient!(out::AbstractVector,h::CircularPressureGeom
             traces[j] = values[k]
         else
             n = normalize(r.metrics.face_area_vector[j]); d = r.metrics.face_centre[j]-r.points[a]
-            traces[j] = p[a]+dot(g[a],d-dot(d,n)*n)
+            traces[j] = p[a]+dot(g[a],d-dot(d,n)*n)+values[k]*dot(d,n)
         end
     end
     integrated = fill(zero(SVector{3,T}),length(r.metrics.coupling.measure))
@@ -222,7 +228,8 @@ end
     circular_pressure_terms(geometry, gradients, cell_mobility, boundary_values)
 
 Positive scalar owner mobility, distance-weighted harmonic shared edge mobility.
-Exterior Dirichlet mobility is owner mobility; homogeneous Neumann flux is zero.
+Exterior mobility is owner mobility. Homogeneous Neumann flux is zero;
+prescribed normal-gradient flux is -owner_mobility*face_area*derivative.
 Freeze gradients, mobility and boundary values together. Cross-interface LSQ is
 not a discontinuous-coefficient gradient-jump reconstruction: general jump-field
 accuracy on curved/skewed meshes is NOT guaranteed. No variable-density flux.
@@ -253,13 +260,15 @@ function circular_pressure_terms(h::CircularPressureGeometry,g::AbstractVector,m
             push!(rows,a);push!(cols,a);push!(entries,bg[k])
             offset[a]+=be[k]-bg[k]*values[k]
         else
-            bg[k]=zero(T);be[k]=zero(T)
+            bg[k]=zero(T)
+            be[k]=-mob[a]*norm(h.reconstruction.metrics.face_area_vector[j])*values[k]
+            offset[a]+=be[k]
         end
     end
     all(x -> isfinite(x) && x > 0,G) && all(x -> isfinite(x) && x > 0,mobility) &&
         all(isfinite,E) && all(isfinite,bg) && all(isfinite,be) && all(isfinite,offset) ||
         _reconstruction_error("invalid pressure term conversion")
-    all(k -> h.boundary_kind[k] == :neumann || bg[k] > 0,eachindex(bg)) || _reconstruction_error("invalid boundary conductance")
+    all(k -> h.boundary_kind[k] != :dirichlet || bg[k] > 0,eachindex(bg)) || _reconstruction_error("invalid boundary conductance")
     A=sparse(rows,cols,entries,n,n)
     all(isfinite,nonzeros(A)) || _reconstruction_error("nonfinite assembled matrix")
     stored_values=T.(values)
@@ -363,7 +372,10 @@ converged=false on iteration exhaustion, never silently accept a frozen solve.
 All-Neumann compatibility/reference checked per connected component; symmetric
 row/column elimination fixes gauges but diagnostics use original ungauged balance.
 Interface entries of predictor_faces are ignored (may be NaN); overlaps are
-mandatory. Neumann pressure cannot change exterior predictor fluxes.
+mandatory. Homogeneous Neumann pressure cannot change exterior predictor fluxes. Prescribed
+normal-gradient boundaries add fixed flux -owner_mobility*face_area*derivative;
+compatibility includes this contribution. Callers enforcing prescribed boundary
+flow must add its negative to their saved pressure-free predictor.
 No inputs are mutated; result includes final frozen terms for reproducible recovery,
 pressure, corrected faces/overlaps, divergence, residual history and convergence.
 No cell velocity correction or variable-density support. Arrays read-only by contract.
@@ -391,8 +403,17 @@ function circular_pressure_project(h::CircularPressureGeometry,mob::AbstractVect
         scale[m.coupling.cell_b[k]]+=abs(predictor_overlaps[k])
     end
     all(isfinite,scale) || _reconstruction_error("nonfinite predictor scale")
-    refs=_pressure_gauges(h,pred,reference,scale,compatibility_tolerance)
     T=eltype(h.beta); p=T.(initial); g=fill(zero(SVector{3,T}),length(p))
+    # Derivative flux is fixed, not an unknown matrix term. Compatibility must
+    # include it; the pressure-free predictor alone need not be compatible.
+    boundary_balance=zeros(T,length(pred))
+    boundary_terms=circular_pressure_terms(h,g,mob,values)
+    for (k,j) in enumerate(h.exterior_faces)
+        h.boundary_kind[k]==:dirichlet && continue
+        a=m.owner_a[j];q=boundary_terms.boundary_correction[k]
+        boundary_balance[a]+=q;scale[a]+=abs(q)
+    end
+    refs=_pressure_gauges(h,pred+boundary_balance,reference,scale,compatibility_tolerance)
     history=NamedTuple{(:continuity,:refreshed),Tuple{T,T}}[]
     terms=nothing; corrected=nothing; converged=false
     for sweep in 1:max_sweeps
