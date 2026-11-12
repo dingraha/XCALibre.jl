@@ -50,9 +50,11 @@ Nor is one scalar physical-face trace sufficient in general to reproduce the
 sum of overlap pressure times differently directed overlap area vectors.
 
 The snapshot and gradient primitive below establish a curved volume/moment and
-pressure-area integration treatment. Before solver integration we still need
-cell-pressure reconstruction, corrected sample locations/centroids as appropriate,
-and diffusion/mobility and skewness review. All solver volume consumers must use
+pressure-area integration treatment. The standalone cell-pressure reconstruction
+and constant-coefficient corrected-flux primitives below extend this treatment.
+Before solver integration we still need exterior/ordinary trace handling,
+variable mobility, deferred-correction sequencing and consistent projection.
+All solver volume consumers must use
 the same geometry; this is not yet connected to source assembly or projection. In particular `area_vector/measure` is NOT
 a unit normal, so existing planar distance/conductance formulas cannot be reused
 unchanged.
@@ -110,6 +112,64 @@ It deliberately demonstrates the error from dividing exact arc pressure-area
 integrals by uncorrected polygon volumes. These are integration tests with exact
 manufactured traces, not a claim of accuracy for interpolated cell pressure or
 an integrated circular SIMPLE solver.
+
+## Cell reconstruction and constant-coefficient corrected flux
+
+```julia
+reconstruction = construct_circular_reconstruction(mesh, coupling)
+flux_geometry = construct_circular_flux_geometry(reconstruction)
+cell_gradient = fill(zero(SVector{3,Float64}), length(mesh.cells))
+circular_reconstruct!(cell_gradient, reconstruction, cell_pressure, exterior_pressure)
+circular_reconstructed_pressure_area!(pressure_area, flux_geometry, cell_pressure, cell_gradient)
+terms = circular_diffusion_terms(flux_geometry, cell_gradient, 0.1)
+overlap_flux = zeros(length(coupling.measure))
+circular_diffusion_flux!(overlap_flux, terms, cell_pressure)
+```
+
+These remain standalone CPU primitives, not boundary descriptors or a solver.
+Cell values are POINT samples at existing mesh cell centres, not curved-cell
+averages. Exterior pressures follow `reconstruction.exterior_faces` order and
+are point samples at `exterior_points` (ordinary exterior chord centres). No
+boundary conditions are evaluated. Internal neighbours and interface donor cells
+enter inverse-distance-squared 2D LSQ; distinct donor IDs are deduplicated so the
+fixed angular seam does not change stencil weights. Rank deficiency or excessive
+normal-matrix condition number is rejected without regularisation. The default
+`condition_limit` is 1e6. All snapshot arrays are read-only by contract.
+
+Flux geometry uses S = integrated overlap area vector, d = xB-xA and
+`beta = dot(S,S)/dot(S,d)`, `T = S-beta*d`. It requires alignment cosine above
+`min_alignment` (default 0.05), plus resolved positive owner distances to the
+plane through the arc midpoint normal to S. These distances define bounded
+weights. No clipping is performed. Some coarse polygonal fixtures have valid
+surface coverage but fail owner-plane bracketing: geometry validity does not
+imply admissibility for this discretisation.
+
+The shared pressure trace is the weighted blend of the two owner affine
+polynomials, referenced at the arc midpoint. Its integral uses exact arc moments;
+it is gauge/constant preserving and affine-exact when owner gradients are exact.
+There is no limiter or guarantee of boundedness for general data.
+
+For positive finite CONSTANT diffusivity/mobility gamma, `CircularDiffusionTerms`
+freezes `G=gamma*beta` and `E=-gamma*dot(g_shared,T)`, with an independent copy
+of flux geometry. Recovery uses `q=G*(phiA-phiB)+E`, oriented out of A. A future
+-Laplacian assembly must use the overlap block `G*[1 -1; -1 1]` and explicit
+RHS additions `(-E,+E)` on (A,B). The same frozen terms must be used for assembly
+and recovery; do not refresh gradients in between. The coefficient block is
+symmetric positive semidefinite, but this does not establish stability or
+monotonicity of a deferred-correction solve. No equation assembly or solve is
+installed by these primitives. Variable coefficient interpolation and pressure
+projection sequencing remain separate work.
+
+All numerical outputs are failure-atomic and reject aliasing input/snapshot
+arrays. Tests independently assemble implicit blocks/explicit RHS and compare
+with recovered cell flux sums. They verify cell-sample reconstruction, affine
+pressure integrals and corrected fluxes, gauge invariance, donor deduplication,
+positive coefficients, conservation, bad stencils/alignment and failure atomicity.
+A logarithmic radial field with simultaneous angular/radial refinement gives
+relative integrated overlap-flux errors approximately 0.0748, 0.0174, 0.00408.
+This is a primitive manufactured-flux study, not convergence of a coupled solver.
+Ordinary exterior face traces in the Gauss chain tests are still analytical;
+production face reconstruction and exterior boundary handling remain to integrate.
 
 ## Rebuild lifecycle
 

@@ -6,7 +6,8 @@ using StaticArrays
 # Two independently segmented polygonal annuli. Radial edges are shared within
 # each annulus; nodes at the common circle remain distinct between zones.
 function circular_interface_fixture(; na=5,nb=8,phase=0.13,integer=Int64,float=Float64,
-    origin=SVector(0.,0.,0.),radius=1.,angles_a=nothing,angles_b=nothing)
+    origin=SVector(0.,0.,0.),radius=1.,angles_a=nothing,angles_b=nothing,
+    inner_radius=0.5radius,outer_radius=1.5radius)
     P,line = XCALibre.Point,XCALibre.line!
     points = typeof(P(0.,0.,0.))[]
     edges = typeof(line([P(0.,0.,0.),P(1.,0.,0.)],1,2,1))[]
@@ -16,7 +17,7 @@ function circular_interface_fixture(; na=5,nb=8,phase=0.13,integer=Int64,float=F
         ts = angles === nothing ? [shift+2pi*k/n for k in 0:n-1] : angles
         n = length(ts)
         offset = length(points)
-        for r in (side == 1 ? (0.5radius,radius) : (radius,1.5radius)), t in ts
+        for r in (side == 1 ? (inner_radius,radius) : (radius,outer_radius)), t in ts
             x = origin + r*SVector(cos(t),sin(t),0.)
             push!(points,P(x...))
         end
