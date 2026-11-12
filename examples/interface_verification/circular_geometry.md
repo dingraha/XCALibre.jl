@@ -52,8 +52,9 @@ sum of overlap pressure times differently directed overlap area vectors.
 The snapshot and gradient primitive below establish a curved volume/moment and
 pressure-area integration treatment. The standalone cell-pressure reconstruction
 and constant-coefficient corrected-flux primitives below extend this treatment.
-Before solver integration we still need exterior/ordinary trace handling,
-variable mobility, deferred-correction sequencing and consistent projection.
+The standalone pressure operator below adds exterior/ordinary trace handling,
+variable mobility and deferred-correction projection. Coupled momentum and
+solver-wide curved-volume integration remain separate work.
 All solver volume consumers must use
 the same geometry; this is not yet connected to source assembly or projection. In particular `area_vector/measure` is NOT
 a unit normal, so existing planar distance/conductance formulas cannot be reused
@@ -157,8 +158,8 @@ RHS additions `(-E,+E)` on (A,B). The same frozen terms must be used for assembl
 and recovery; do not refresh gradients in between. The coefficient block is
 symmetric positive semidefinite, but this does not establish stability or
 monotonicity of a deferred-correction solve. No equation assembly or solve is
-installed by these primitives. Variable coefficient interpolation and pressure
-projection sequencing remain separate work.
+installed by these primitives. The separate standalone pressure operator below
+adds variable coefficient interpolation, assembly and pressure projection.
 
 All numerical outputs are failure-atomic and reject aliasing input/snapshot
 arrays. Tests independently assemble implicit blocks/explicit RHS and compare
@@ -168,8 +169,97 @@ positive coefficients, conservation, bad stencils/alignment and failure atomicit
 A logarithmic radial field with simultaneous angular/radial refinement gives
 relative integrated overlap-flux errors approximately 0.0748, 0.0174, 0.00408.
 This is a primitive manufactured-flux study, not convergence of a coupled solver.
-Ordinary exterior face traces in the Gauss chain tests are still analytical;
-production face reconstruction and exterior boundary handling remain to integrate.
+Ordinary exterior face traces in those primitive Gauss chain tests are still
+analytical; the pressure operator below also tests the complete reconstructed chain.
+
+## Standalone static pressure projection
+
+`construct_circular_pressure_geometry(mesh, coupling, kinds)` builds an independent
+CPU snapshot of ordinary internal/exterior faces and shared circular overlaps.
+`kinds` covers every noninterface exterior face in ascending face-ID order (the
+same order as `CircularReconstruction.exterior_faces`), using only `:dirichlet`
+or `:neumann`. Boundary values are scalar chord-face-centre point values for
+Dirichlet; Neumann entries MUST be zero. There are no boundary callbacks,
+ordinary solver descriptors, momentum equations, SIMPLE, or ALE support.
+
+```julia
+r = construct_circular_reconstruction(mesh, coupling)
+kinds = fill(:dirichlet, length(r.exterior_faces))
+h = construct_circular_pressure_geometry(mesh, coupling, kinds)
+# boundary_values: one prescribed pressure at each r.exterior_points entry
+# mobility: positive scalar cell values, e.g. corrected volume / physical diagonal
+result = circular_pressure_project(h, mobility, boundary_values,
+    predictor_faces, predictor_overlaps; max_sweeps=200, tolerance=1e-10)
+@assert result.converged
+```
+
+`predictor_faces` has global face length, `predictor_overlaps` has overlap length.
+Physical interface face entries of `predictor_faces` are ignored (NaN allowed):
+overlaps supply the interface flux, and result face entries are signed diagnostic
+sums. Predictor arrays are never mutated. Each sweep overwrites corrected fluxes
+from this saved predictor; repeated calls do not accumulate pressure corrections.
+
+Boundary-aware LSQ replaces exterior pressure-difference rows on Neumann faces
+by unit-normal derivative rows, with zero RHS and unit weight. This constrains
+only the normal derivative, unlike copying owner pressure to a displaced face.
+Normal matrices are revalidated without regularisation. Construction also
+validates the original all-sample reconstruction stencil, so both stencils must
+pass the chosen condition limit. Ordinary internal traces blend the two affine
+owner polynomials at the face centre. Neumann traces tangentially extrapolate the
+owner reconstruction; Dirichlet traces use prescribed point values. Circular
+traces integrate shared affine polynomials with exact moments. The complete
+`circular_pressure_gradient!` chain uses corrected volumes, without changing mesh
+cell centres or interpreting cell pressures as curved-cell averages.
+
+Each ordinary internal face and overlap has the validated beta/T split described
+above. Positive owner mobility is interpolated using series resistance:
+`r_f=(dA+dB)/(dA/rA+dB/rB)`. Its stable scaled implementation avoids overflowing
+reciprocals for extreme ratios. Boundary Dirichlet faces use owner mobility;
+Neumann pressure flux is exactly zero, irrespective of tangential reconstruction.
+`circular_pressure_terms(h, gradients, mobility, boundary_values)` freezes all
+implicit/explicit terms, boundary data and independent geometry. Its ungauged
+sparse integrated negative-Laplacian matrix satisfies
+`matrix*p + offset == balance(pressure_flux)`.
+`circular_pressure_flux(terms, p)` recovers ordinary and overlap fluxes from the
+SAME terms. Pressure-flux balance is gathered once per face/overlap; divergence
+is balance divided by corrected volume. No volumetric source API is provided.
+
+The projection solves `balance(qH+qp)=0` using direct CPU sparse solves. Each sweep
+reconstructs, freezes terms, assembles, solves and recovers fluxes. It then
+reconstructs again at the new pressure to evaluate the refreshed full-operator
+residual. BOTH recovered continuity and refreshed residual must be below
+`tolerance`, an absolute integrated-flux tolerance. Exhaustion returns
+`converged=false` with final pressure/fluxes, frozen `terms` and residual history.
+There is no automatic damping or unconditional convergence guarantee for the
+explicit tangential correction. Continuity of a frozen solve alone is not enough.
+
+All-Neumann components require a reference dictionary, e.g. `reference=Dict(1=>0.0)`
+for one connected unanchored domain. Require exactly one reference per unanchored
+component; reject references on Dirichlet-anchored components. Compatibility is
+checked on EACH component using its own predictor-flux scale, not global
+cancellation. Symmetric row/column elimination fixes gauges, while convergence
+and flux diagnostics evaluate original ungauged equations. Default compatibility
+tolerance is `1000eps(T)` times max(component scale,1); imbalance beyond it is
+rejected rather than hidden in the reference equation. Homogeneous pressure
+Neumann boundaries cannot correct an unbalanced exterior predictor.
+
+Tests cover full reconstructed affine gradients (including an affine field tangent
+to a Neumann face), harmonic-mobility positivity, sparse assembly/recovery,
+manufactured discrete variable-mobility projections, gauge invariance, incompatible
+predictors, frozen-solve versus refreshed convergence and failure-atomic gradient
+outputs. Component checks and gauge elimination additionally have independent
+synthetic disconnected-graph tests. Radial log-pressure solves with simultaneous
+angular/radial refinement give maximum cell-pressure errors approximately
+0.0656, 0.0106, 0.00226. This is a standalone scalar pressure study, not a coupled
+flow convergence result. Discontinuous mobility tests establish conservation,
+operator consistency and orthogonal series resistance only: cross-interface LSQ
+can smear physical gradient jumps, so general curved/skewed discontinuous-field
+accuracy is NOT claimed.
+
+The next coupled-flow milestone requires momentum assembly, physical-diagonal
+mobility, consistent corrected volumes in all consumers, cell velocity correction
+and explicit lifecycle/continuation rules. Existing planar/ordinary solvers remain
+unchanged; do not pass these snapshots into their pressure paths.
 
 ## Rebuild lifecycle
 
