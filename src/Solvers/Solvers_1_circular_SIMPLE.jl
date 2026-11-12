@@ -9,6 +9,9 @@ Boundary pairs: prescribed velocity/homogeneous or prescribed-gradient pressure,
 velocity Neumann/fixed pressure. Backflow is rejected. One velocity anchor per
 component and one reference per pressure-unanchored component are required.
 Tolerances are absolute integrated momentum/flow and point-field-change units.
+`predictor=:low_order` preserves the original path; opt-in `:reconstructed`
+reconstructs H0-rD*GaussGradient(p_old), retaining low-order interpolation of
+rD*GaussGradient(p_old). Config changes require a new state.
 """
 mutable struct CircularSimpleState{M,V,P,C,F}
     geometry::M
@@ -27,7 +30,7 @@ function CircularSimpleState(m::CircularMomentumGeometry,U::AbstractVector,p::Ab
     velocity_values::AbstractVector,pressure_values::AbstractVector,viscosity::Real;
     reference=Dict{Int,Float64}(),relaxation_U=0.7,relaxation_p=0.3,
     momentum_tolerance=1e-9,continuity_tolerance=1e-10,change_tolerance=1e-9,
-    pressure_tolerance=1e-11,pressure_sweeps=200)
+    pressure_tolerance=1e-11,pressure_sweeps=200,predictor=:low_order)
     IC=InterfaceCoupling
     IC._momentum_values(m,U,velocity_values)
     IC._pressure_data(m.pressure,p,pressure_values)
@@ -35,6 +38,7 @@ function CircularSimpleState(m::CircularMomentumGeometry,U::AbstractVector,p::Ab
     all(x -> isfinite(x) && 0<x<=1,(relaxation_U,relaxation_p)) || throw(ArgumentError("relaxations must lie in (0,1]"))
     all(x -> isfinite(x) && x>0,(momentum_tolerance,continuity_tolerance,change_tolerance,pressure_tolerance)) || throw(ArgumentError("positive finite tolerances required"))
     pressure_sweeps isa Integer && pressure_sweeps>0 || throw(ArgumentError("positive pressure sweep count required"))
+    predictor in (:low_order,:reconstructed) || throw(ArgumentError("unsupported circular predictor"))
     for k in eachindex(m.velocity.boundary_kind)
         u,q=m.velocity.boundary_kind[k],m.pressure.boundary_kind[k]
         (u==:dirichlet && q in (:neumann,:normal_gradient)) || (u==:neumann && q==:dirichlet) ||
@@ -62,7 +66,7 @@ function CircularSimpleState(m::CircularMomentumGeometry,U::AbstractVector,p::Ab
     T=eltype(m.pressure.beta)
     cfg=(;velocity_values=SVector{3,T}.(velocity_values),pressure_values=T.(pressure_values),viscosity=T(viscosity),
         reference=Dict(Int(i)=>T(v) for (i,v) in pairs(reference)),relaxation_U,relaxation_p,
-        momentum_tolerance,continuity_tolerance,change_tolerance,pressure_tolerance,pressure_sweeps)
+        momentum_tolerance,continuity_tolerance,change_tolerance,pressure_tolerance,pressure_sweeps,predictor)
     all(x -> all(isfinite,x),cfg.velocity_values) && all(isfinite,cfg.pressure_values) &&
         isfinite(cfg.viscosity) && cfg.viscosity>0 && all(isfinite,values(cfg.reference)) || throw(ArgumentError("invalid configuration conversion"))
     u=SVector{3,T}.(U);q=T.(p)
@@ -99,7 +103,13 @@ function circular_simple!(s::CircularSimpleState;iterations=100)
         U,p=s.velocity,s.pressure
         terms=circular_momentum_terms(m,U,cfg.velocity_values,p,cfg.pressure_values,s.faces,s.overlaps,cfg.viscosity)
         step=circular_momentum_solve(terms,U;relaxation=cfg.relaxation_U)
-        pred=circular_momentum_predictor_flux(m,step.H0,cfg.velocity_values)
+        if cfg.predictor==:reconstructed
+            # Reuse the exact saved integrated force: -force/D = rD*G(p_old).
+            pressure_velocity=-terms.pressure_force./step.physical_diagonal
+            pred=circular_momentum_reconstructed_predictor_flux(m,step.H0,pressure_velocity,cfg.velocity_values)
+        else
+            pred=circular_momentum_predictor_flux(m,step.H0,cfg.velocity_values)
+        end
         # Add the opposite of the fixed pressure derivative flux so recovery
         # preserves prescribed boundary flow, including impermeable walls.
         for (k,j) in enumerate(m.pressure.exterior_faces)

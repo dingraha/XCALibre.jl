@@ -3,7 +3,10 @@
 A separate [circular geometry prototype](circular_geometry.md) validates shared
 angular overlaps, consistent curved metrics, standalone operators and a separate
 restricted static circular SIMPLE path; it does not extend the planar solver.
-See [static circular Couette verification](circular_simple.md).
+See [static circular Couette verification](circular_simple.md), including the
+opt-in reconstructed physical predictor. Run `circular_predictor.jl` to compare
+it with the unchanged low-order default; pressure improves in the documented
+refinement sequence, but gradient and phase-sensitive accuracy remain limited.
 
 These CPU examples build their own meshes and write no output files. Use an environment
 containing XCALibre and its dependencies:

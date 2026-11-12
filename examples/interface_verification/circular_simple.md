@@ -151,12 +151,75 @@ plateau. Max Gauss-gradient errors grow under refinement in both modes. This is
 an unresolved accuracy issue even though momentum/pressure/continuity residuals
 converge tightly. No pressure or gradient convergence claim is made. The wall BC
 mismatch was therefore not the sole or dominant fine-grid error in this study.
-Investigating the physical-predictor/pressure-gradient fixed point, boundary
-localisation of gradient errors and a consistent reconstructed predictor is the
-next diagnostic task, separate from implementing automatic wall derivatives.
+The subsequent diagnostic and opt-in reconstructed predictor are described below;
+automatic wall derivatives remain separate future work.
 
 Tests cover affine LSQ and Gauss reproduction, variable-mobility assembly/recovery,
 nonzero derivative compatibility (including an incompatible predictor alone),
 mixed Dirichlet/gradient boundaries, wall-flow preservation, gauge/relaxation
 agreement, continuation and failure reset. These establish discrete consistency,
 not general curved-flow accuracy or stability.
+
+## Opt-in reconstructed physical predictor
+
+The original `predictor=:low_order` remains the default and preserves all preceding
+results. Select `predictor=:reconstructed` in `CircularSimpleState` or
+`circular_couette_case` to reconstruct the provisional velocity
+`W=H0-rD*GaussGradient(p_old)` with the velocity-boundary-aware LSQ stencil.
+This is the provisional velocity at current physical mobility, not simply U_old
+or the relaxed momentum solution. Interpolate the supplied pressure-velocity
+contribution `rD*GaussGradient(p_old)` with the original geometric weights.
+Thus the predictor is reconstructed W flux plus low-order pressure-velocity flux;
+it is NOT reconstruction of all H0, and does not multiply by mobility twice.
+At a fixed point W equals the corrected cell velocity.
+
+The standalone API is
+`circular_momentum_reconstructed_predictor_flux(m,H0,pressure_velocity,values)`.
+Ordinary internal faces blend owner affine traces at the chord centre. Circular
+flux uses exact area moments componentwise, including variations along the arc;
+each overlap has one A-outward result gathered with opposite signs on B. Exterior
+Dirichlet flux stays prescribed, exterior Neumann retains owner H0/backflow checks,
+and prescribed pressure-gradient compensation remains in SIMPLE. Pressure
+assembly/recovery, cell correction, retained convection flux, residual criteria and
+failure/continuation rules are unchanged. Initial/reset fluxes retain the original
+geometric interpolation; unchanged successful calls retain projected flux exactly.
+
+Read-only diagnostics identified spurious divergence at nonmatching circular
+interfaces when the low-order predictor was applied to analytical Couette velocity.
+Its maximum remained about 0.00173/0.00156/0.00149 at k=1/2/4, while analytical
+integrated flux divergence was below 5e-16. Pressure/gradient errors concentrated
+near the interface, not walls. Matching segmentation/zero phase removed the
+pressure plateau in the control. Replacing only the velocity contribution in an
+isolated frozen-mobility projection greatly reduced pressure error; this motivated
+the split reconstruction rather than changing pressure boundaries or deleting
+deferred pressure corrections.
+
+Run the coupled comparison:
+
+```sh
+julia --threads=4 --project=<environment> examples/interface_verification/circular_predictor.jl
+```
+
+For analytical wall derivatives and the same na=12k/nb=15k/nra=nrb=2k/phase=.13/k:
+
+| k | Reconstructed iterations | Velocity relative L2 | Pressure error, low-order | Pressure error, reconstructed | Reconstructed max gradient error |
+|---|---:|---:|---:|---:|---:|
+| 1 | 33 | 0.134053 | 0.00123585 | 0.00073419 | 0.00282793 |
+| 2 | 78 | 0.036400 | 0.00110068 | 0.00023501 | 0.00196130 |
+| 4 | 273 | 0.0093486 | 0.00115315 | 0.00010669 | 0.00203285 |
+
+Pressure error decreases in this sequence and the finest result improves about
+10.8-fold over low-order interpolation. Max gradient error is much smaller but
+still nonmonotonic. No universal pressure/gradient order or stability claim is
+made. Coarse default 16/19 segmentation with phase 0 or .71 converges but has
+pressure errors about 0.00191 and 0.000688 respectively: accuracy remains strongly
+phase/geometry-sensitive. This is why reconstruction is opt-in, not a blanket
+replacement. Polygon walls, variable mobility, general skew geometries and
+momentum truncation errors still require investigation.
+
+Tests verify affine exact ordinary/arc integration, zero radial overlap flux for
+solid-body rotation, constant preservation, signed conservative gathers, pressure
+contribution interpolation, input validation, prescribed walls/mixed outlets and
+backflow rejection. Coupled tests retain tight residual criteria and check gauge/
+relaxation agreement, split continuation, changed-field reset and failed-step
+atomicity. Ordinary and planar solvers remain unchanged. No motion/ALE/GCL is added.
