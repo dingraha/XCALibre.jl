@@ -28,6 +28,7 @@ const TIERS = [
         "unit/InterfaceCoupling/test_circular_metrics.jl",
         "unit/InterfaceCoupling/test_circular_reconstruction.jl",
         "unit/InterfaceCoupling/test_circular_pressure.jl",
+        "unit/InterfaceCoupling/test_circular_momentum.jl",
         "unit/InterfaceCoupling/test_planar_diffusion.jl",
         "unit/InterfaceCoupling/test_planar_transport.jl",
         "unit/InterfaceCoupling/test_planar_pressure.jl",

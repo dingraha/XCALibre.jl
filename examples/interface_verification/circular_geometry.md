@@ -256,10 +256,86 @@ operator consistency and orthogonal series resistance only: cross-interface LSQ
 can smear physical gradient jumps, so general curved/skewed discontinuous-field
 accuracy is NOT claimed.
 
-The next coupled-flow milestone requires momentum assembly, physical-diagonal
-mobility, consistent corrected volumes in all consumers, cell velocity correction
-and explicit lifecycle/continuation rules. Existing planar/ordinary solvers remain
-unchanged; do not pass these snapshots into their pressure paths.
+The standalone momentum primitives below add integrated momentum assembly and
+physical-diagonal mobility. Coupled cell velocity correction, SIMPLE sequencing
+and lifecycle/continuation rules remain separate work. Existing planar/ordinary
+solvers remain unchanged; do not pass snapshots into their pressure paths.
+
+## Standalone circular momentum and physical predictor
+
+`construct_circular_momentum_geometry(pressure_geometry, velocity_kinds)` copies
+the validated pressure geometry and builds a separate velocity LSQ stencil.
+Velocity kinds cover the same exterior face order and support only `:dirichlet`
+and homogeneous `:neumann`. Boundary vectors must be finite Cartesian xy
+`SVector{3}` values; Neumann entries must be zero vectors. Pressure and velocity
+boundary kinds are independent. Unit density, constant positive viscosity,
+static CPU Mesh2 and Upwind convection only; no body-force, transient,
+transpose-stress, SIMPLE, motion or ALE support is introduced.
+
+```julia
+m = construct_circular_momentum_geometry(h, velocity_kinds)
+terms = circular_momentum_terms(m, velocity, velocity_boundary_values,
+    pressure, pressure_boundary_values, convection_faces, convection_overlaps, viscosity)
+step = circular_momentum_solve(terms, velocity; relaxation=0.7)
+predictor = circular_momentum_predictor_flux(m, step.H0, velocity_boundary_values)
+# Feed step.mobility and predictor to the standalone pressure projection separately.
+```
+
+Cell/boundary velocity arrays store `SVector{3}` point values, with exactly zero z.
+Internal Upwind links use `a=max(q,0)`, `b=min(q,0)` and block `[a b; -a -b]`.
+Individual signed overlap fluxes are mandatory; interface physical-face entries
+are ignored and rebuilt as diagnostic sums. Ordinary internal/exterior faces are
+assembled once. Exterior convection uses prescribed velocity on Dirichlet
+inflow, owner velocity on outflow. Any Neumann inflow is rejected, including in
+predictor interpolation. Zero-gradient velocity is NOT impermeability: prescribe
+zero velocity for walls and ensure the supplied convection wall flux is zero.
+The primitive does not manufacture or overwrite a caller's convection flux to
+make it compatible with wall data.
+
+Constant-viscosity diffusion uses the validated beta/T split componentwise,
+with shared weighted component gradients and frozen explicit corrections. The
+same scalar implicit matrix serves x/y. `circular_momentum_flux(terms,U)` recovers
+one shared vector convection+viscous flux per edge; its integrated balance equals
+`matrix*U+offset` componentwise. Pressure is an explicit saved force, not included
+in those transport flux arrays: `pressure_force=-Vcurved*GaussGradient(p)` from
+the complete reconstructed pressure-area chain. The physical momentum equation
+is `matrix*U+offset=pressure_force`. Ordinary polygon-volume source-removal
+helpers are not used. No volumetric source API is provided.
+
+The solve is ONE frozen direct sparse solve, not a deferred momentum iteration.
+Each connected component must contain a prescribed velocity boundary; singular
+all-Neumann momentum solves are rejected. For physical diagonal D and relaxation
+alpha in (0,1], the augmented diagonal is
+`Dt=max(abs(D),sum(abs(offdiagonal)))/alpha`, with RHS augmentation
+`(Dt-D)*oldU`. Even alpha=1 can augment D. Predictor recovery removes the saved
+pressure force and undoes the COMPLETE diagonal/source augmentation:
+`H0=(Dt*Hv-(Dt-D)*oldU)/D`; mobility is `Vcurved/D`, never polygonal volume/D.
+`step` reports solved `velocity`, `H0`, `mobility`, both diagonals and frozen,
+physical and refreshed integrated momentum residuals. The refreshed residual
+reconstructs viscous corrections at the new velocity with the same convection
+and pressure force. A small frozen residual does not establish physical/deferred
+convergence; no automatic momentum sweep or stopping criterion is installed.
+
+Predictor flux interpolation blends H0 geometrically and dots it with integrated
+S. It is velocity-like and is NOT multiplied by mobility again. This deliberately
+low-order interpolation is not an exact affine curved velocity integral. Exterior
+Dirichlet predictor flux uses prescribed velocity; Neumann uses owner H0, with
+inflow rejection. A future coupled loop must retain pressure-corrected continuity
+fluxes for convection rather than replacing them with cell-velocity interpolation.
+
+Snapshots own independent geometry, boundary values, fluxes, gradients and
+pressure force; caller arrays are never mutated by assembly, solve or recovery.
+Tests cover independent dense matrix assembly, signed Upwind flux recovery,
+vector conservation, constant preservation under complete divergence-free balance,
+affine viscous fluxes, pressure-gauge invariance, boundary-kind independence,
+Float32/64 and Int32/64, validation/ownership, and physical predictor equivalence
+to unrelaxed sparse rows at alpha=0.5/0.8/1 (including alpha=1 augmentation).
+Identical trial velocities give the same recovered physical predictor regardless
+of relaxation; different relaxed solves can and generally DO give different
+velocities/predictors. A test-only deferred viscous solve converges to affine
+Cartesian velocity at these relaxation values; this is not coupled SIMPLE or a
+general stability claim. Next: consistent cell velocity correction, coupling
+sequencing, continuation rules and coupled-flow verification before motion/ALE.
 
 ## Rebuild lifecycle
 
