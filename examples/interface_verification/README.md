@@ -1,5 +1,67 @@
 # Static planar-interface verification
 
+## Filled circle in a periodic square (geometry only)
+
+`circular_square_setup.jl` defines `CircularSquareGeometry.build(; na=16, nb=20,
+nra=3, nrb=3, phase=0.0, L=1.0, radius=0.25, core_half=0.10)` without running a
+simulation. It returns a `Mesh2`, exact circular coupling/metrics, resolved exterior
+periodic descriptors and inner/outer cell ranges. Angular counts must be multiples
+of four. A rotated square tensor core fills the centre; O-grids connect it to the
+circle and the circle to the stationary outer square. Phase rotates the whole inner
+zone only. Matching counts/zero phase provide a matched **split** control.
+`build(; na=16, nb=16, stitched=true)` instead reuses identical circle node IDs,
+removes interface patches and makes ordinary internal chord faces. Stitched mode
+requires equal counts and zero phase. Its cell centres agree with the matched split
+mesh, but chord-cell volumes differ from exact-arc corrected volumes.
+
+The example assembles polygon owners from exact node-ID incidence because stock
+multiblock connections support opposite local edge slots, whereas core/O-grid joins
+also use perpendicular slots. This is an example-local construction, not a production
+mesher change. No coordinate-proximity node merging or geometry fallback is used.
+
+Tests in `test/cases/test_circular_square_geometry.jl` verify signed cell areas,
+strict convexity, topology, filled centre, periodic pairs, full circle coverage,
+corrected zone volumes and affine surface moments at three refinements/phases.
+Nonmatching polygonal zones have chord gaps/overlaps; exact arc metrics, not raw
+polygon volumes, represent the intended square partition. Cell centres remain
+point samples. Rebuild snapshots after any geometry/ID change.
+
+**No flow solve, transient coupling, motion or ALE is implemented by this helper.**
+The split mesh must not be passed to ordinary PISO as though circular patches were
+already coupled.
+
+### Static all-periodic circular scalar operators
+
+`construct_periodic_circular_geometry(mesh, coupling, pairs)` builds an independent
+CPU snapshot. `pairs` contains `(face_a, face_b, shift_b_to_a)` exactly once per
+periodic pair and must cover every noninterface exterior face. For the helper:
+
+```julia
+pairs = [(f, g, -bc.value.transform.distance) for bc in q.periodic if bc isa PeriodicParent for (f, g) in zip(bc.IDs_range, bc.value.face_map)]
+h = construct_periodic_circular_geometry(q.mesh, q.coupling, pairs)
+```
+
+`periodic_circular_reconstruct!` uses inverse-distance-squared LSQ with translated
+neighbour images, preserving distinct images even when cell IDs coincide.
+`periodic_circular_gradient!` reconstructs shared ordinary/periodic traces and
+integrates circular traces with exact moments. `periodic_circular_terms(h, gradients,
+gamma)` freezes positive constant-coefficient scalar negative-Laplacian terms;
+`periodic_circular_flux(terms, values)` recovers from those same terms. Each edge
+contributes once with opposite owner signs; paired exterior diagnostic fluxes are
+exact negatives. Matrix/offset use integrated balance, not volume-divided rows.
+
+Input fields must be periodic scalars. A global affine scalar is **not periodic**;
+per-image affine moments and smooth periodic analytic fields are tested separately.
+No quasi-periodic pressure jump, rotational vector transform, variable coefficient,
+pressure solve, momentum coupling or transient solver is provided here. Existing
+nonperiodic circular APIs/defaults remain unchanged. Snapshot arrays are read-only;
+rebuild after geometry, IDs or periodic configuration changes.
+
+`test/cases/test_circular_periodic_operators.jl` verifies original matrix/flux identity,
+shared conservation, gauge invariance, conditioning, rejection/lifecycle, smooth
+periodic gradient refinement and stitched-control topology. These checks are not a
+transient Taylor–Green or full Laplacian-accuracy qualification.
+
 A separate [circular geometry prototype](circular_geometry.md) validates shared
 angular overlaps, consistent curved metrics, standalone operators and a separate
 restricted static circular SIMPLE path; it does not extend the planar solver.
