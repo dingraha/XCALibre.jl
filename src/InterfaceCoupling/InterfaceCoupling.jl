@@ -17,5 +17,6 @@ include("InterfaceCoupling_6_circular_pressure.jl")
 include("InterfaceCoupling_7_circular_momentum.jl")
 include("InterfaceCoupling_8_circular_predictor.jl")
 include("InterfaceCoupling_9_circular_periodic.jl")
+include("InterfaceCoupling_10_circular_quadratic.jl")
 
 end

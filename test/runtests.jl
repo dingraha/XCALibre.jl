@@ -106,6 +106,8 @@ const TIERS = [
         "cases/test_taylor_green_analytical.jl",
         "cases/test_circular_square_geometry.jl",
         "cases/test_circular_periodic_operators.jl",
+        "cases/test_circular_periodic_diffusion.jl",
+        "cases/test_circular_periodic_quadratic.jl",
         "cases/test_planar_verification_examples.jl",
         "cases/test_adaptive_dt.jl",
         "cases/test_2d_incompressible_flatplate_KOmega_lowRe.jl",

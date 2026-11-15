@@ -62,6 +62,60 @@ shared conservation, gauge invariance, conditioning, rejection/lifecycle, smooth
 periodic gradient refinement and stitched-control topology. These checks are not a
 transient Taylor–Green or full Laplacian-accuracy qualification.
 
+### Opt-in quadratic scalar diffusion snapshot
+
+`construct_periodic_circular_quadratic(h; coefficient=1.0)` freezes a deep copy
+of `PeriodicCircularGeometry`, fixed two-hop scaled quadratic LSQ stencils and
+sparse shared-edge/cell maps. Current scope: static CPU Float64, filled unit square
+with unit-axis translated periodic exterior pairs and a split circle. Five resolved
+nonconstant coefficients are required; no adaptive enlargement, regularisation or
+fallback. `condition_limit` (default100) and `max_rows` (default80) may tighten limits.
+
+```julia
+t = construct_periodic_circular_quadratic(h; coefficient=1.0)
+p = [sin(2pi*x[1])*cos(2pi*x[2]) for x in h.points]
+r = periodic_circular_quadratic_flux(t, p)
+# t.edge_matrix*p == r.edges (shared integrated outward flux)
+# t.matrix*p ≈ r.balance (integrated negative Laplacian, not divided by volume)
+```
+
+This is a **nonsymmetric full reconstructed-gradient operator**, not the original
+positive two-point matrix plus deferred correction. Snapshot arrays are read-only;
+rebuild after geometry/connectivity/pair changes. No solver registration, gauge row,
+pressure/momentum/PISO/ALE/GPU/MPI support or default change. Only constant positive
+coefficient supported. Existing terms/flux APIs remain unchanged.
+
+`test/cases/test_circular_periodic_quadratic.jl` checks independent integrated
+polynomial-gradient flux, local quadratic coefficient reproduction, sparse-map
+closure/conservation, translated images, failure/lifecycle isolation and solved
+manufactured refinement. Bounded workspace studies found positive mean-zero scalar
+energy on tested fine meshes and convergent GMRES, not an arbitrary-mesh guarantee.
+Fine relative RMS was1.3–1.6%; previous coarse RMS<.10 failures remain documented,
+not retroactively relabelled. Standalone stitched control remains diagnostic-only.
+
+### Manufactured diffusion application (accuracy study)
+
+`circular_periodic_diffusion.jl` defines `CircularPeriodicDiffusion.evaluate(q)` for
+unit-square fixtures. It applies the static scalar diffusion operator to
+`sin(2πx)cos(2πy)` and compares integrated cell balances against independent volume
+quadrature of `8π²p`. Volume quadrature integrates each bilinear polygon plus signed
+circle segments; independent boundary quadrature integrates analytic gradient flux
+on straight faces/exact arcs. Orders 8/12 check quadrature convergence. The output
+separates circle-adjacent, seam-adjacent and remaining cells, also fixed physical
+bands, and distinguishes cell-integrated source from centre point sampling.
+
+The stitched chord control uses an explicitly labelled **diagnostic implementation
+of the same two-point/corrected scalar formula**, not the stock XCALibre Laplacian
+assembly. Analytical gradients are an additional oracle, never solver data.
+
+In the bounded three-refinement study, global errors decrease but circle-adjacent
+and seam-adjacent refinement gates **fail**, including the stitched control. The
+operator is not locally truncation-accuracy-qualified. Conservation, quadrature and
+matrix/flux certificate tests pass; their test success must not be interpreted as
+passing the separate accuracy gates. No solver/operator changes or tolerance tuning
+were made in response. Workspace study artifacts/report retain the failed gates
+and warmed construction/application/storage measurements.
+
 A separate [circular geometry prototype](circular_geometry.md) validates shared
 angular overlaps, consistent curved metrics, standalone operators and a separate
 restricted static circular SIMPLE path; it does not extend the planar solver.
