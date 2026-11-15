@@ -93,6 +93,34 @@ energy on tested fine meshes and convergent GMRES, not an arbitrary-mesh guarant
 Fine relative RMS was1.3–1.6%; previous coarse RMS<.10 failures remain documented,
 not retroactively relabelled. Standalone stitched control remains diagnostic-only.
 
+### Opt-in quadratic surface traces and Gauss gradient
+
+```julia
+s = construct_periodic_circular_surfaces(t)
+normal_trace = periodic_circular_surface_trace(s, p) # shared ∫p*n ds vectors
+G = periodic_circular_surface_gradient(s, p)        # conservative Gauss / curved V
+U = [SVector(sin(2pi*x[1])*cos(2pi*x[2]), -cos(2pi*x[1])*sin(2pi*x[2]), 0.0) for x in h.points] # using StaticArrays
+rU = periodic_circular_surface_flux(s, U)           # shared ∫U⋅n ds, faces, balances
+```
+
+`PeriodicCircularSurfaces` owns a deep copy of the quadratic snapshot, exact centred
+first/second normal-area moments and three sparse scalar normal-area trace maps.
+Ordinary straight chords use their full quadratic line moments; circle overlaps use
+analytic Fourier integrals. Owner polynomials are blended using the frozen geometric
+weights and evaluated in each edge's translated frame. Diffusion coefficient does
+not multiply these value traces. `normal_trace` is **not** a face-centre scalar.
+Gradient means gathered surface integrals divided by corrected volume, not polynomial
+centre derivatives. Velocity is a vector of finite three-component Cartesian vectors
+with exactly zero z. All outputs owned; all snapshot arrays read-only by contract.
+
+Same static CPU Float64 unit-square split-circle scope as the quadratic scalar API.
+No pressure response/projection, mobility, momentum solve, transient/ALE support,
+rotational vector transformation or solver default changes. Independent polynomial
+and surface quadrature certificates plus matched/nonmatching smooth periodic-field
+refinement are in `test/cases/test_circular_periodic_surfaces.jl` and the workspace
+surface study. Good gradient/velocity-flux accuracy does not certify collocated
+pressure stability or enforce zero divergence for arbitrary sampled velocities.
+
 ### Manufactured diffusion application (accuracy study)
 
 `circular_periodic_diffusion.jl` defines `CircularPeriodicDiffusion.evaluate(q)` for

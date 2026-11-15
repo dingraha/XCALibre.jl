@@ -18,5 +18,6 @@ include("InterfaceCoupling_7_circular_momentum.jl")
 include("InterfaceCoupling_8_circular_predictor.jl")
 include("InterfaceCoupling_9_circular_periodic.jl")
 include("InterfaceCoupling_10_circular_quadratic.jl")
+include("InterfaceCoupling_11_circular_surfaces.jl")
 
 end
