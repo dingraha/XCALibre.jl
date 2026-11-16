@@ -26,6 +26,7 @@ include("Solvers/Solvers.jl")
 include("Distribute/Distribute.jl")
 include("Preprocess/Preprocess.jl")
 include("Mesh/BlockMesher2D/BlockMesher2D.jl")
+include("NCC/NCC.jl") # experimental opt-in frozen scalar facade; no top-level reexport
 
 using Reexport
 @reexport using XCALibre.Multithread

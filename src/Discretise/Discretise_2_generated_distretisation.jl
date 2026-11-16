@@ -44,7 +44,7 @@ function discretise!(
     nzval0 = _nzval(A0)
     (; diag_nz, face_nz) = eqn.equation
 
-    _pattern_extended(nzval0, mesh) && fill_nzval!(nzval0, config)
+    fill_nzval!(nzval0, config)
 
     _sync_gradients!(model.terms, mesh, config)
     terms, sources = _kernel_model(model, mesh)
@@ -83,7 +83,7 @@ end
             # Call scheme generated fucntion
             ac, an = _scheme!(terms, nzval0, cells, faces, nID, ns, cIndex, nIndex, fID, prev, runtime)
             ac_sum += ac
-            nzval0[nIndex] = an
+            nzval0[nIndex] += an
             bf = _scheme_face_source!(terms, bf, cells, faces, i, nID, ns, fID)
         end
 
@@ -121,7 +121,7 @@ function discretise!(
     nzval = _nzval(A)
     (; diag_nz, face_nz) = eqn.equation
 
-    _pattern_extended(nzval, mesh) && fill_nzval!(nzval, config)
+    fill_nzval!(nzval, config)
 
     _sync_gradients!(model.terms, mesh, config)
     terms, sources = _kernel_model(model, mesh)
@@ -133,9 +133,8 @@ function discretise!(
     # # KernelAbstractions.synchronize(backend)
 end
 
-# the kernels assign every diagonal and one entry per cell face, which is the whole pattern unless a
-# boundary condition added entries (periodic) or two faces share a cell pair; only then is a reset needed
-_pattern_extended(nzval, mesh) = length(nzval) != length(mesh.cells) + length(mesh.cell_faces)
+# Clear before row-owned accumulation: repeated faces can share an off-diagonal slot.
+# A count comparison cannot prove uniqueness when boundary extensions also add entries.
 
 fill_nzval!(nzval, config) = begin
     z = zero(eltype(nzval))
@@ -170,7 +169,7 @@ end
             # Call scheme generated fucntion
             ac, an = _scheme!(terms, nzval, cells, faces, nID, ns, cIndex, nIndex, fID, prev, runtime)
             ac_sum += ac
-            nzval[nIndex] = an
+            nzval[nIndex] += an
             bf = _scheme_face_source!(terms, bf, cells, faces, i, nID, ns, fID)
         end
         

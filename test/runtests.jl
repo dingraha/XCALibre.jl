@@ -35,6 +35,7 @@ const TIERS = [
         "unit/Discretise/test_robin.jl",
         "unit/Discretise/test_nonorthogonal_flux.jl",
         "unit/Discretise/test_boundary_accumulation.jl",
+        "unit/Discretise/test_repeated_links.jl",
         "unit/Discretise/test_linear_upwind.jl",
         "unit/Discretise/test_lustdc.jl",
         "unit/Discretise/test_lustlu.jl",
