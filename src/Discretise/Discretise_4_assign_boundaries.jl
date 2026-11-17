@@ -2,7 +2,11 @@ export assign
 
 (::Type{T})(name::Symbol, value) where T<:AbstractBoundary = T(name,value,0:0)
 
+# Domain-specific admission without dispatching on a keyword argument.
+_assignment_preflight(region) = nothing
+
 function assign(args; region)
+    _assignment_preflight(region)
     BCs = []
     names = propertynames(args)
     for arg ∈ args
