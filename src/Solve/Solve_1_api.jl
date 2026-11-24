@@ -16,18 +16,30 @@ struct SolverSetup{
     S1<:AbstractLinearSolver,
     S2<:Union{Nothing, AbstractSmoother},
     PT<:PreconditionerType,
-    PR<:AbstractSolvePrecision
+    PR<:AbstractSolvePrecision,
+    L<:Union{Nothing, Tuple{F,F}}
     }
     solver::S1
     smoother::S2
     preconditioner::PT
     convergence::F
     relax::F
-    limit::Union{Nothing, Tuple{F,F}}
+    limit::L
     itmax::I
     atol::F
     rtol::F
     precision::PR
+end
+
+# Preserve explicit six-parameter construction and its bound conversions while
+# giving the optional limit concrete storage for compiler/AD type analysis.
+function SolverSetup{F,I,S1,S2,PT,PR}(
+        solver, smoother, preconditioner, convergence, relax, limit,
+        itmax, atol, rtol, precision) where {F,I,S1,S2,PT,PR}
+    converted_limit = convert(Union{Nothing, Tuple{F,F}}, limit)
+    return SolverSetup{F,I,S1,S2,PT,PR,typeof(converted_limit)}(
+        solver, smoother, preconditioner, convergence, relax, converted_limit,
+        itmax, atol, rtol, precision)
 end
 
 """
@@ -63,7 +75,7 @@ This function is used to provide solver settings that will be used internally in
 - `convergence`: residual target for this field that stops the outer (e.g. SIMPLE) iteration; it does not control the linear solver, which stops on `atol`, `rtol` and `itmax`. The residual, `Σ|b - Ax| / Σ|Aᵢᵢxᵢ|`, is taken on the field before the linear solve, so it does not depend on the solver settings.
 - `relax`: specifies the relaxation factor to be used e.g. set to 1 for no relaxation
 - `smoother`: specifies smoothing method to be applied before discretisation. `JacobiSmoother`: is currently the only choice (defaults to `nothing`)
-- `limit`: used in some solvers to bound the solution within these limits e.g. (min, max). It defaults to `nothing`
+- `limit`: used in some solvers to bound the solution within these limits e.g. (min, max). It defaults to `nothing`; tuple bounds are converted to `float_type`. The concrete setup type specializes on whether the limit is `nothing` or a tuple, so changing between them requires reconstruction (e.g. with Accessors `@reset`), not calling the existing concrete type's constructor.
 - `itmax`: maximum number of iterations in a single solver pass (defaults to 1000). Also applies to PETSc solves.
 - `atol`: absolute tolerance of the linear solve, in the field's units (defaults to eps(float_type)^0.9).
 - `rtol`: relative tolerance of the linear solve (defaults to 1e-1). Every solver, preconditioner, precision and backend (including AMG and PETSc) stops when ‖D⁻¹(b - Ax)‖₂ ≤ `atol` + `rtol`·‖D⁻¹(b - Ax₀)‖₂, D = |diag(A)|: the size of a Jacobi correction, with `rtol` relative to that of the initial guess x₀ (the current field values), not to ‖b‖.
